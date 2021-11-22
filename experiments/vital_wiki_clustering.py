@@ -1,6 +1,6 @@
 import math
 import random
-
+import argparse
 import transformers
 from transformers import AdamW
 import torch
@@ -226,15 +226,26 @@ else:
     device = torch.device('cpu')
     print('CUDA not available, using device: '+str(device))
 
-with open('../data/vital_article_cats.json', 'r') as f:
+parser = argparse.ArgumentParser(description='Run query specific clustering experiments on Vital wiki dataset')
+parser.add_argument('-vt', '--vital_cats', help='Path to vital article categories', default='~/QSC_data/vital_wiki/vital_article_cats.json')
+parser.add_argument('-aq', '--art_qrels', help='Path to article qrels', default='~/QSC_data/train/base.train.cbor-article.qrels')
+parser.add_argument('-tq', '--qrels', help='Path to toplevel/ hierarchical qrels', default='~/QSC_data/train/base.train.cbor-toplevel.qrels')
+parser.add_argument('-pt', '--para_texts', help='Path to paratext file', default='~/QSC_data/train/train_paratext.tsv')
+parser.add_argument('-ne', '--experiment', type=int, help='Choose the experiment to run (1: QSC/ 2: baseline)', default=1)
+
+args = parser.parse_args()
+
+with open(args.vital_cats, 'r') as f:
     vital_cats = json.load(f)
 
-q_paras = get_article_qrels('D:\\new_cats_data\\train\\base.train.cbor-article.qrels')
-rev_para_qrels = get_rev_qrels('D:\\new_cats_data\\train\\base.train.cbor-toplevel.qrels')
+q_paras = get_article_qrels(args.art_qrels)
+rev_para_qrels = get_rev_qrels(args.qrels)
 
-train_dataset = Vital_Wiki_Dataset(vital_cats[0], q_paras, rev_para_qrels, 'D:\\new_cats_data\\train\\train_paratext.tsv', 35)
-val_dataset = Vital_Wiki_Dataset(vital_cats[1], q_paras, rev_para_qrels, 'D:\\new_cats_data\\train\\train_paratext.tsv', 35)
-test_dataset = Vital_Wiki_Dataset(vital_cats[2], q_paras, rev_para_qrels, 'D:\\new_cats_data\\train\\train_paratext.tsv', 35)
+train_dataset = Vital_Wiki_Dataset(vital_cats[0], q_paras, rev_para_qrels, args.para_texts, 35)
+val_dataset = Vital_Wiki_Dataset(vital_cats[1], q_paras, rev_para_qrels, args.para_texts, 35)
+test_dataset = Vital_Wiki_Dataset(vital_cats[2], q_paras, rev_para_qrels, args.para_texts, 35)
 
-#treccar_clustering_single_model(train_dataset, test_dataset, device, val_dataset)
-treccar_clustering_baseline_sbert_triplet_model(train_dataset, test_dataset, device, val_dataset)
+if args.experiment == 1:
+    treccar_clustering_single_model(train_dataset, test_dataset, device, val_dataset)
+elif args.experiment == 2:
+    treccar_clustering_baseline_sbert_triplet_model(train_dataset, test_dataset, device, val_dataset)
