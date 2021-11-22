@@ -227,10 +227,10 @@ else:
     print('CUDA not available, using device: '+str(device))
 
 parser = argparse.ArgumentParser(description='Run query specific clustering experiments on Vital wiki dataset')
-parser.add_argument('-vt', '--vital_cats', help='Path to vital article categories', default='~/QSC_data/vital_wiki/vital_article_cats.json')
-parser.add_argument('-aq', '--art_qrels', help='Path to article qrels', default='~/QSC_data/train/base.train.cbor-article.qrels')
-parser.add_argument('-tq', '--qrels', help='Path to toplevel/ hierarchical qrels', default='~/QSC_data/train/base.train.cbor-toplevel.qrels')
-parser.add_argument('-pt', '--para_texts', help='Path to paratext file', default='~/QSC_data/train/train_paratext.tsv')
+parser.add_argument('-vt', '--vital_cats', help='Path to vital article categories', default='/home/sk1105/QSC_data/vital_wiki/vital_article_cats.json')
+parser.add_argument('-aq', '--art_qrels', help='Path to article qrels', default='/home/sk1105/QSC_data/train/base.train.cbor-article.qrels')
+parser.add_argument('-tq', '--qrels', help='Path to toplevel/ hierarchical qrels', default='/home/sk1105/QSC_data/train/base.train.cbor-toplevel.qrels')
+parser.add_argument('-pt', '--para_texts', help='Path to paratext file', default='/home/sk1105/QSC_data/train/train_paratext.tsv')
 parser.add_argument('-ne', '--experiment', type=int, help='Choose the experiment to run (1: QSC/ 2: baseline)', default=1)
 
 args = parser.parse_args()
