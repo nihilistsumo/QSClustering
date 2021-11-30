@@ -51,8 +51,7 @@ class QuerySpecificClusteringModel(nn.Module):
         #self.C, self.a = self.dkm(self.qp, self.qp[:k])
         init_c = self.qp[random.sample(range(self.qp.shape[0]), k)].detach().clone()
         self.C, self.a = self.dkm(self.qp, init_c)
-        self.sim_mat = 1 / (1 + torch.cdist(self.a, self.a))
-        return self.sim_mat
+        return self.C, self.a
 
     def get_embedding(self, input_features):
         self.qp = self.qp_model(input_features)['sentence_embedding']
