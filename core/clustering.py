@@ -49,12 +49,17 @@ class DKM(nn.Module):
         self.threshold = threshold
         self.max_iter = max_iter
         self.softmax = nn.Softmax(dim=1)
+        self.cos = nn.CosineSimilarity()
         self.eps = eps
+
+    def cosine_sim(self, x, y):
+        return self.cos(x.repeat_interleave(y.shape[0], dim=0), y.repeat((x.shape[0], 1))).reshape(x.shape[0], y.shape[0])
 
     def forward(self, X, C_init):
         self.emb_dim = X.shape[1]
         self.C = C_init
         self.d = -torch.cdist(X, C_init, p=2.0)
+        #self.d = self.cosine_sim(X, C_init)
         self.a = self.softmax(self.d/self.temp)
         self.a_sum = torch.sum(self.a, dim=0) + self.eps
         self.C_new = torch.matmul(self.a.T, X)/self.a_sum.repeat((self.emb_dim, 1)).T
@@ -63,6 +68,7 @@ class DKM(nn.Module):
         while diff > self.threshold and i < self.max_iter:
             self.C = self.C_new
             self.d = -torch.cdist(X, self.C, p=2.0)
+            #self.d = self.cosine_sim(X, C_init)
             self.a = self.softmax(self.d / self.temp)
             self.a_sum = torch.sum(self.a, dim=0) + self.eps
             self.C_new = torch.matmul(self.a.T, X) / self.a_sum.repeat((self.emb_dim, 1)).T
@@ -82,7 +88,6 @@ class QuerySpecificClusteringModel(nn.Module):
 
     def forward(self, input_features, k):
         self.qp = self.qp_model(input_features)['sentence_embedding']
-        #self.C, self.a = self.dkm(self.qp, self.qp[:k])
         init_c = self.qp[random.sample(range(self.qp.shape[0]), k)].detach().clone()
         self.C, self.a = self.dkm(self.qp, init_c)
         return self.C, self.a
