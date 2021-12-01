@@ -7,8 +7,8 @@ import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
 import torch.nn as nn
-from sklearn.metrics import adjusted_rand_score
-from core.clustering import QuerySpecificClusteringModel, SBERTTripletLossModel
+from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
+from core.clustering import QuerySpecificClusteringModel, SBERTTripletLossModel, get_nmi_loss, get_weighted_adj_rand_loss
 from util.data import Vital_Wiki_Dataset, get_article_qrels, get_rev_qrels
 from tqdm import tqdm, trange
 import json
@@ -27,6 +27,7 @@ def put_features_in_device(input_features, device):
 def do_eval(dataset, model, device):
     model.eval()
     rand = 0
+    nmi = 0
     num = 0
     preds = []
     for article_sample in dataset:
@@ -40,14 +41,16 @@ def do_eval(dataset, model, device):
             pred_labels = model.get_clustering(input_features, k)
             preds.append(pred_labels)
             rand += adjusted_rand_score(true_labels, pred_labels)
+            nmi += normalized_mutual_info_score(true_labels, pred_labels)
             num += 1
     print(random.sample(preds, 1)[0])
-    return rand / num
+    return rand / num, nmi / num
 
 
 def do_triplet_eval(dataset, model):
     model.eval()
     rand = 0
+    nmi = 0
     num = 0
     preds = []
     for article_sample in dataset:
@@ -57,15 +60,17 @@ def do_triplet_eval(dataset, model):
             pred_labels = model.get_clustering(batch.para_texts, k)
             preds.append(pred_labels)
             rand += adjusted_rand_score(true_labels, pred_labels)
+            nmi += normalized_mutual_info_score(true_labels, pred_labels)
             num += 1
     print(random.sample(preds, 1)[0])
-    return rand / num
+    return rand / num, nmi / num
 
 
 def treccar_clustering_single_model(train_dataset,
                                     test_dataset,
                                     device,
                                     val_dataset=None,
+                                    loss_name='nmi',
                                     max_num_tokens=128,
                                     max_grad_norm=1.0,
                                     weight_decay=0.01,
@@ -75,7 +80,6 @@ def treccar_clustering_single_model(train_dataset,
                                     emb_model_name='sentence-transformers/all-MiniLM-L6-v2',
                                     emb_dim=256,
                                     alpha=0.5):
-    mse = nn.MSELoss()
     num_steps_per_epoch = len(train_dataset)
     num_train_steps = num_epochs * num_steps_per_epoch
     model = QuerySpecificClusteringModel(emb_model_name, emb_dim, device, max_num_tokens)
@@ -88,42 +92,50 @@ def treccar_clustering_single_model(train_dataset,
     ]
     opt = AdamW(optimizer_grouped_parameters, lr=lrate)
     schd = transformers.get_linear_schedule_with_warmup(opt, warmup, num_epochs * num_train_steps)
-    val_rand = do_eval(val_dataset, model, device)
-    test_rand = do_eval(test_dataset, model, device)
-    print('\nVal RAND %.4f, Test RAND %.4f' % (val_rand, test_rand))
+    val_rand, val_nmi = do_eval(val_dataset, model, device)
+    test_rand, test_nmi = do_eval(test_dataset, model, device)
+    print('\nVal RAND %.4f, Val NMI %.4f, Test RAND %.4f, Test NMI %.4f' % (val_rand, val_nmi, test_rand, test_nmi))
+    if loss_name == 'nmi':
+        loss_func = get_nmi_loss
+    else:
+        loss_func = get_weighted_adj_rand_loss
     for epoch in tqdm(range(num_epochs)):
         train_ids = list(range(len(train_dataset)))
         random.shuffle(train_ids)
         for idx in tqdm(range(len(train_ids))):
             if idx > 0 and idx % 500 == 0:
-                val_rand = do_eval(val_dataset, model, device)
-                test_rand = do_eval(test_dataset, model, device)
-                print('\nVal RAND %.4f, Test RAND %.4f' % (val_rand, test_rand))
+                val_rand, val_nmi = do_eval(val_dataset, model, device)
+                test_rand, test_nmi = do_eval(test_dataset, model, device)
+                print('\nVal RAND %.4f, Val NMI %.4f, Test RAND %.4f, Test NMI %.4f' % (val_rand, val_nmi, test_rand, test_nmi))
             model.train()
             article_sample = train_dataset[train_ids[idx]]
             for batch in article_sample:
                 query_content = batch.q
+                n = len(batch.paras)
+                k = len(set(batch.para_labels))
                 input_texts = [(query_content, t) for t in batch.para_texts]
                 input_features = model.qp_model.tokenize(input_texts)
                 #print(sample.q + ' max tokens %d' % input_features['input_ids'][0].size())
-                gt = torch.zeros(len(batch.paras), len(batch.paras), device=device)
-                gt_weights = torch.ones(len(batch.paras), len(batch.paras), device=device)
-                para_label_freq = {k: batch.para_labels.count(k) for k in set(batch.para_labels)}
-                for i in range(len(batch.paras)):
-                    for j in range(len(batch.paras)):
+                '''
+                gt = torch.zeros(n, n, device=device)
+                gt_weights = torch.ones(n, n, device=device)
+                para_label_freq = {k: batch.para_labels.count(k) for k in unique_labels}
+                for i in range(n):
+                    for j in range(n):
                         if batch.para_labels[i] == batch.para_labels[j]:
                             gt[i][j] = 1.0
                             gt_weights[i][j] = para_label_freq[batch.para_labels[i]]
+                '''
                 put_features_in_device(input_features, device)
-                k = len(set(batch.para_labels))
                 #print(GPUtil.showUtilization())
                 mc, ma = model(input_features, k)
-                sim_mat = 1 / (1 + torch.cdist(ma, ma))
+                #sim_mat = 1 / (1 + torch.cdist(ma, ma))
                 #print(GPUtil.showUtilization())
                 #loss = mse(gt, sim_mat)
                 #reg = torch.relu(len(batch.paras) + torch.sum((1 - gt) * sim_mat) - torch.sum(gt * sim_mat))
                 # weighted mse
-                loss = torch.sum(((gt - sim_mat) ** 2) * gt_weights) / gt.shape[0]
+                #loss = torch.sum(((gt - sim_mat) ** 2) * gt_weights) / gt.shape[0]
+                loss = loss_func(ma, batch.para_labels, device)
                 loss.backward()
                 #print(batch.q + ' %d paras, Loss %.4f' % (len(batch.paras), loss.detach().item()))
                 nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
@@ -132,10 +144,10 @@ def treccar_clustering_single_model(train_dataset,
                 schd.step()
         print('Evaluation')
         print('==========')
-        val_rand = do_eval(val_dataset, model, device)
-        print('Validation RAND %.4f' % val_rand)
-        test_rand = do_eval(test_dataset, model, device)
-        print('Test RAND %.4f' % test_rand)
+        val_rand, val_nmi = do_eval(val_dataset, model, device)
+        print('Validation RAND %.4f, NMI %.4f' % (val_rand, val_nmi))
+        test_rand, test_nmi = do_eval(test_dataset, model, device)
+        print('Test RAND %.4f, NMI %.4f' % (test_rand, test_nmi))
 
 
 def treccar_clustering_baseline_sbert_triplet_model(train_dataset,

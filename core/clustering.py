@@ -7,6 +7,40 @@ import random
 random.seed(42)
 
 
+# Both gt and a are n x k matrix
+def get_nmi_loss(a, para_labels, device):
+    n = len(para_labels)
+    unique_labels = list(set(para_labels))
+    k = len(unique_labels)
+    gt = torch.zeros(n, k, device=device)
+    for i in range(n):
+        gt[i][unique_labels.index(para_labels[i])] = 1.0
+    G = torch.sum(gt, dim=0)
+    C = torch.sum(a, dim=0)
+    U = torch.matmul(gt.T, a)
+    n = torch.sum(a)
+    GxC = torch.outer(G, C)
+    mi = torch.sum((U / n) * torch.log(n * U / GxC))
+    nmi = 2 * mi / (-torch.sum(G * torch.log(G / n) / n) - torch.sum(C * torch.log(C / n) / n))
+    return -nmi
+
+
+def get_weighted_adj_rand_loss(a, para_labels, device):
+    n = len(para_labels)
+    unique_labels = list(set(para_labels))
+    gt = torch.zeros(n, n, device=device)
+    gt_weights = torch.ones(n, n, device=device)
+    para_label_freq = {k: para_labels.count(k) for k in unique_labels}
+    for i in range(n):
+        for j in range(n):
+            if para_labels[i] == para_labels[j]:
+                gt[i][j] = 1.0
+                gt_weights[i][j] = para_label_freq[para_labels[i]]
+    sim_mat = 1 / (1 + torch.cdist(a, a))
+    loss = torch.sum(((gt - sim_mat) ** 2) * gt_weights) / gt.shape[0]
+    return loss
+
+
 class DKM(nn.Module):
 
     def __init__(self, temp=0.5, threshold=0.0001, max_iter=100, eps=1e-6):
