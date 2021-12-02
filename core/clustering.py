@@ -97,7 +97,7 @@ class DKM_param(nn.Module):
         x_tr = x.repeat_interleave(y.shape[0], dim=0)
         y_tr = y.repeat((x.shape[0], 1))
         q_tr = q.repeat((y_tr.shape[0], 1))
-        qxy_tr = torch.hstack((x_tr, y_tr, x_tr - y_tr, x_tr - q, y_tr - q))
+        qxy_tr = torch.hstack((x_tr, y_tr, torch.abs(x_tr - y_tr), torch.abs(x_tr - q), torch.abs(y_tr - q)))
         d = self.final_act(self.fc2(self.act(self.fc1(qxy_tr)))).reshape(x.shape[0], y.shape[0])
         return d
 
