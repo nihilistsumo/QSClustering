@@ -92,14 +92,16 @@ def treccar_clustering_dkm_param_model(train_dataset,
                                     device,
                                     val_dataset=None,
                                     loss_name='nmi',
+                                    max_num_tokens=128,
                                     max_grad_norm=1.0,
-                                    warmup=10000,
-                                    lrate=2e-5,
-                                    num_epochs=5,
-                                    sbert_model_name='all-mpnet-base-v2'):
+                                    warmup=1000,
+                                    lrate=2e-4,
+                                    num_epochs=50,
+                                    emb_model_name='sentence-transformers/all-MiniLM-L6-v2',
+                                    emb_dim=256):
     num_steps_per_epoch = len(train_dataset)
     num_train_steps = num_epochs * num_steps_per_epoch
-    model = QuerySpecificDKM(sbert_model_name, device)
+    model = QuerySpecificDKM(emb_model_name, emb_dim, device, max_num_tokens)
     opt = AdamW(model.parameters(), lr=lrate)
     schd = transformers.get_linear_schedule_with_warmup(opt, warmup, num_epochs * num_train_steps)
     val_rand, val_nmi = do_dkm_param_eval(val_dataset, model)

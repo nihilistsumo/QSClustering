@@ -125,9 +125,13 @@ class DKM_param(nn.Module):
 
 
 class QuerySpecificDKM(nn.Module):
-    def __init__(self, sbert_model_name, device):
+    def __init__(self, trans_model_name, emb_dim, device, max_len):
         super(QuerySpecificDKM, self).__init__()
-        self.emb_model = SentenceTransformer(sbert_model_name)
+        trans_model = models.Transformer(trans_model_name, max_seq_length=max_len)
+        pool_model = models.Pooling(trans_model.get_word_embedding_dimension())
+        dense_model = models.Dense(in_features=pool_model.get_sentence_embedding_dimension(), out_features=emb_dim,
+                                   activation_function=nn.Tanh())
+        self.emb_model = SentenceTransformer(modules=[trans_model, pool_model]).to(device)
         self.device = device
         self.dkm = DKM_param(emb_dim=self.emb_model.get_sentence_embedding_dimension())
         self.dkm.to(device)
