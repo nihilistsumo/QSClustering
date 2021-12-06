@@ -175,10 +175,10 @@ class QuerySpecificClusteringModel(nn.Module):
         self.qp = self.qp_model(input_features)['sentence_embedding']
         return self.qp
 
-    def get_clustering(self, input_features, k):
-        self.qp = self.qp_model(input_features)['sentence_embedding']
-        init_c = self.qp[random.sample(range(self.qp.shape[0]), k)].detach().clone()
-        self.C, self.a = self.dkm(self.qp, init_c)
+    def get_clustering(self, embeddings, k):
+        #self.qp = self.qp_model(input_features)['sentence_embedding']
+        init_c = embeddings[random.sample(range(embeddings.shape[0]), k)].detach().clone()
+        self.C, self.a = self.dkm(embeddings, init_c)
         pred_labels = torch.argmax(self.a, dim=1).detach().cpu().numpy()
         return pred_labels
 
