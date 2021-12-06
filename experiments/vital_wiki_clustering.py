@@ -99,7 +99,7 @@ def treccar_clustering_dkm_param_model(train_dataset,
                                     device,
                                     val_dataset=None,
                                     query_context_ref=None,
-                                    loss_name='nmi',
+                                    loss_name='adj',
                                     max_num_tokens=128,
                                     max_grad_norm=1.0,
                                     warmup=5000,
@@ -294,17 +294,17 @@ def treccar_clustering_baseline_sbert_triplet_model(train_dataset,
     ]
     opt = AdamW(optimizer_grouped_parameters, lr=lrate)
     schd = transformers.get_linear_schedule_with_warmup(opt, warmup, num_epochs * num_train_steps)
-    val_rand = do_triplet_eval(val_dataset, model)
-    test_rand = do_triplet_eval(test_dataset, model)
-    print('\nVal RAND %.4f, Test RAND %.4f' % (val_rand, test_rand))
+    val_rand, val_nmi = do_triplet_eval(val_dataset, model)
+    test_rand, test_nmi = do_triplet_eval(test_dataset, model)
+    print('\nVal RAND %.4f, Val NMI %.4f, Test RAND %.4f, Test NMI %.4f' % (val_rand, val_nmi, test_rand, test_nmi))
     for epoch in tqdm(range(num_epochs)):
         train_ids = list(range(len(train_dataset)))
         random.shuffle(train_ids)
         for idx in tqdm(range(len(train_ids))):
             if idx > 0 and idx % 500 == 0:
-                val_rand = do_triplet_eval(val_dataset, model)
-                test_rand = do_triplet_eval(test_dataset, model)
-                print('\nVal RAND %.4f, Test RAND %.4f' % (val_rand, test_rand))
+                val_rand, val_nmi = do_triplet_eval(val_dataset, model)
+                test_rand, test_nmi = do_triplet_eval(test_dataset, model)
+                print('\nVal RAND %.4f, Val NMI %.4f, Test RAND %.4f, Test NMI %.4f' % (val_rand, val_nmi, test_rand, test_nmi))
             model.train()
             article_sample = train_dataset[train_ids[idx]]
             for batch in article_sample:
