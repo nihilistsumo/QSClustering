@@ -205,10 +205,10 @@ class SBERTTripletLossModel(nn.Module):
         qp = torch.from_numpy(self.emb_model.encode(input_texts))
         return qp
 
-    def get_clustering(self, input_texts, k):
-        x = self.get_embedding(input_texts)
-        init_c = x[random.sample(range(x.shape[0]), k)].detach().clone()
-        self.C, self.a = self.dkm(x, init_c)
+    def get_clustering(self, embeddings, k):
+        #x = self.get_embedding(input_texts)
+        init_c = embeddings[random.sample(range(embeddings.shape[0]), k)].detach().clone()
+        self.C, self.a = self.dkm(embeddings, init_c)
         pred_labels = torch.argmax(self.a, dim=1).detach().cpu().numpy()
         return pred_labels
 
