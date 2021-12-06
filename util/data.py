@@ -1,5 +1,7 @@
 import json
 import math
+import random
+
 from torch.utils.data import Dataset
 from rank_bm25 import BM25Okapi
 
@@ -65,6 +67,18 @@ class TRECCAR_sample(object):
     def __str__(self):
         return 'Sample ' + self.q + ' with %d passages and %d unique clusters' % (len(self.paras),
                                                                                   len(set(self.para_labels)))
+
+
+class Arxiv_Training_Sample(object):
+    def __init__(self, q, papers, paper_labels, paper_texts):
+        self.q = q
+        self.papers = papers
+        self.paper_labels = paper_labels
+        self.paper_texts = paper_texts
+
+    def __str__(self):
+        return 'Sample subject: ' + self.q + ' with %d paper abstracts and %d unique clusters' % (len(self.papers),
+                                                                                        len(set(self.paper_labels)))
 
 
 class TRECCAR_Datset(Dataset):
@@ -160,6 +174,44 @@ class Vital_Wiki_Dataset(Dataset):
                 batched_samples.append(TRECCAR_sample(self.rev_art_cat[a], paras_batch, para_labels_batch,
                                                       para_texts[b * self.max_num_paras: (b + 1) * self.max_num_paras]))
         return batched_samples
+
+
+class Arxiv_Dataset(Dataset):
+    def __init__(self, arxiv_training_data, max_num_samples_per_query=1000, max_num_papers=35, max_k=5):
+        self.arxiv_data = arxiv_training_data
+        self.rev_subfield_abstract = {}
+        for s in self.arxiv_data.keys():
+            for i in range(len(self.arxiv_data[s])):
+                d = self.arxiv_data[s][i]
+                if d['label'] not in self.rev_subfield_abstract.keys():
+                    self.rev_subfield_abstract[d['label']] = [i]
+                else:
+                    self.rev_subfield_abstract[d['label']].append(i)
+        self.subjects = list(self.arxiv_data.keys())
+        self.subfield_dict = {}
+        self.samples = []
+        for s in self.subjects:
+            self.subfield_dict[s] = list(set([d['label'] for d in self.arxiv_data[s]]))
+            for i in range(max_num_samples_per_query):
+                num_k = min(max_k, len(self.subfield_dict[s]))
+                subfields = random.sample(self.subfield_dict[s], num_k)
+                papers = []
+                for sf in subfields:
+                    papers += random.sample(self.rev_subfield_abstract[sf], max_num_papers // num_k)
+                random.shuffle(papers)
+                self.samples.append((s, papers))
+        random.shuffle(self.samples)
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        sample = self.samples[idx]
+        q = sample[0]
+        papers = sample[1]
+        paper_labels = [self.arxiv_data[q][pi]['label'] for pi in papers]
+        paper_texts = [self.arxiv_data[q][pi]['abstract'] for pi in papers]
+        return Arxiv_Training_Sample(q, papers, paper_labels, paper_texts)
 
 
 def separate_multi_batch(sample, max_num_paras):
