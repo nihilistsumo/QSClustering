@@ -4,6 +4,7 @@ import random
 
 from torch.utils.data import Dataset
 from rank_bm25 import BM25Okapi
+from sklearn.model_selection import StratifiedKFold
 
 
 def get_article_qrels(art_qrels):
@@ -177,8 +178,13 @@ class Vital_Wiki_Dataset(Dataset):
 
 
 class Arxiv_Dataset(Dataset):
-    def __init__(self, arxiv_training_data, max_num_samples_per_query=1000, max_num_papers=35, max_k=5):
-        self.arxiv_data = arxiv_training_data
+    def __init__(self, arxiv_, training_ids, testing_ids, fold, max_num_samples_per_query=1000, max_num_papers=35, max_k=5):
+        self.arxiv_data = {}
+        for s in arxiv_.keys():
+            self.arxiv_data[s] = [arxiv_[s][i] for i in training_ids[s][fold]]
+        self.test_arxiv_data = {}
+        for s in arxiv_.keys():
+            self.test_arxiv_data[s] = [arxiv_[s][i] for i in testing_ids[s][fold]]
         self.rev_subfield_abstract = {}
         for s in self.arxiv_data.keys():
             for i in range(len(self.arxiv_data[s])):
@@ -212,6 +218,29 @@ class Arxiv_Dataset(Dataset):
         paper_labels = [self.arxiv_data[q][pi]['label'] for pi in papers]
         paper_texts = [self.arxiv_data[q][pi]['abstract'] for pi in papers]
         return Arxiv_Training_Sample(q, papers, paper_labels, paper_texts)
+
+
+def prepare_arxiv_data_for_cv(arxiv_data_file, num_folds=5):
+    with open(arxiv_data_file, 'r') as f:
+        arxiv_data = json.load(f)
+    training_ids, test_ids = {}, {}
+    for s in arxiv_data.keys():
+        papers = arxiv_data[s]
+        skf = StratifiedKFold(n_splits=num_folds, shuffle=True)
+        for train_indices, test_indices in skf.split(papers, [p['label'] for p in papers]):
+            train_indices, test_indices = list(train_indices), list(test_indices)
+            if s in training_ids.keys():
+                training_ids[s].append(train_indices)
+            else:
+                training_ids[s] = [train_indices]
+            if s in test_ids.keys():
+                test_ids[s].append(test_indices)
+            else:
+                test_ids[s] = [test_indices]
+    cv_datasets = []
+    for i in range(num_folds):
+        cv_datasets.append(Arxiv_Dataset(arxiv_data, training_ids, test_ids, i))
+    return cv_datasets
 
 
 def separate_multi_batch(sample, max_num_paras):
