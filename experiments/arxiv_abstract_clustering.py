@@ -222,7 +222,7 @@ else:
     print('CUDA not available, using device: '+str(device))
 parser = argparse.ArgumentParser(description='Run query specific clustering experiments on Arxiv dataset')
 parser.add_argument('-ad', '--arxiv_data', help='Path to arxiv clustering npy file prepared for 5-fold cv', default='D:\\arxiv_dataset\\arxiv_clustering_data_5cv.npy')
-parser.add_argument('-ne', '--experiment', type=int, help='Choose the experiment to run (1: QSC/ 2: baseline)', default=2)
+parser.add_argument('-ne', '--experiment', type=int, help='Choose the experiment to run (1: QSC/ 2: baseline)', default=1)
 
 args = parser.parse_args()
 if args.experiment == 1:
