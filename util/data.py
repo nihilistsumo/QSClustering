@@ -70,6 +70,19 @@ class TRECCAR_sample(object):
                                                                                   len(set(self.para_labels)))
 
 
+class Vital_Wiki_sample(object):
+    def __init__(self, q, category, paras, para_labels, para_texts):
+        self.q = q
+        self.category = category
+        self.paras = paras
+        self.para_labels = para_labels
+        self.para_texts = para_texts
+
+    def __str__(self):
+        return 'Sample ' + self.q + ' from category ' + self.category + ' with %d passages and %d unique clusters' % (len(self.paras),
+                                                                                  len(set(self.para_labels)))
+
+
 class Arxiv_Training_Sample(object):
     def __init__(self, q, papers, paper_labels, paper_texts):
         self.q = q
@@ -177,6 +190,35 @@ class Vital_Wiki_Dataset(Dataset):
         return batched_samples
 
 
+class Vital_Wiki_Dataset_for_cv(Dataset):
+    def __init__(self, rev_para_labels, para_texts, training_articles, testing_articles, fold, max_num_paras=35):
+        num_articles_per_category = min([len(training_articles[c].keys()) for c in training_articles.keys()])
+        self.samples = []
+        self.test_samples = []
+        for c in training_articles.keys():
+            articles = random.sample(list(training_articles[c].keys()), num_articles_per_category)
+            for a in articles:
+                paras = training_articles[c][a][fold]
+                random.shuffle(paras)
+                if len(paras) > max_num_paras:
+                    paras = random.sample(paras, max_num_paras)
+                para_labels = [rev_para_labels[p] for p in paras]
+                texts = [para_texts[p] for p in paras]
+                self.samples.append(Vital_Wiki_sample(a, c, paras, para_labels, texts))
+        for c in testing_articles.keys():
+            for a in testing_articles[c].keys():
+                paras = testing_articles[c][a][fold]
+                para_labels = [rev_para_labels[p] for p in paras]
+                texts = [para_texts[p] for p in paras]
+                self.test_samples.append(Vital_Wiki_sample(a, c, paras, para_labels, texts))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        return self.samples[idx]
+
+
 class Arxiv_Dataset(Dataset):
     def __init__(self, arxiv_, training_ids, testing_ids, fold, max_num_samples_per_query=1000, max_num_papers=35, max_k=5):
         self.arxiv_data = {}
@@ -240,6 +282,60 @@ def prepare_arxiv_data_for_cv(arxiv_data_file, num_folds=5):
     cv_datasets = []
     for i in range(num_folds):
         cv_datasets.append(Arxiv_Dataset(arxiv_data, training_ids, test_ids, i))
+    return cv_datasets
+
+
+def prepare_vital_wiki_data_for_cv(art_qrels, qrels, paratext_tsv, vital_cats_data, num_folds=2):
+    page_paras = get_article_qrels(art_qrels)
+    rev_para_labels = get_rev_qrels(qrels)
+    with open(vital_cats_data, 'r') as f:
+        cats = json.load(f)
+    all_vital_cats_dict = {}
+    for d in cats:
+        for c in d.keys():
+            if c not in all_vital_cats_dict.keys():
+                all_vital_cats_dict[c] = [a for a in d[c] if 'enwiki:' + a in page_paras.keys()]
+            else:
+                all_vital_cats_dict[c] += [a for a in d[c] if 'enwiki:' + a in page_paras.keys()]
+    train_article_paras, test_article_paras = {}, {}
+    all_paras = []
+    for c in all_vital_cats_dict.keys():
+        train_article_paras[c] = {}
+        test_article_paras[c] = {}
+        for a in all_vital_cats_dict[c]:
+            article = 'enwiki:' + a
+            paras = page_paras[article]
+            para_labels = [rev_para_labels[p] for p in paras]
+            para_label_count = {label: para_labels.count(label) for label in para_labels}
+            selected_paras, selected_labels = [], []
+            for i in range(len(paras)):
+                p = paras[i]
+                if para_label_count[para_labels[i]] > 3:
+                    selected_paras.append(p)
+                    selected_labels.append(para_labels[i])
+            if article in page_paras.keys() and len(selected_paras) > 0 and len(set(selected_labels)) > 1:
+                all_paras += selected_paras
+                skf = StratifiedKFold(n_splits=num_folds, shuffle=True)
+                for train_indices, test_indices in skf.split(selected_paras, selected_labels):
+                    if article in train_article_paras[c].keys():
+                        train_article_paras[c][article].append([selected_paras[i] for i in train_indices])
+                    else:
+                        train_article_paras[c][article] = [[selected_paras[i] for i in train_indices]]
+                    if article in test_article_paras[c].keys():
+                        test_article_paras[c][article].append([selected_paras[i] for i in test_indices])
+                    else:
+                        test_article_paras[c][article] = [[selected_paras[i] for i in test_indices]]
+    all_paras = set(all_paras)
+    paratext = {}
+    with open(paratext_tsv, 'r', encoding='utf-8') as f:
+        for l in f:
+            p = l.split('\t')[0]
+            if p in all_paras:
+                paratext[p] = l.split('\t')[1].strip()
+    cv_datasets = []
+    for i in range(num_folds):
+        cv_datasets.append(Vital_Wiki_Dataset_for_cv(rev_para_labels, paratext,
+                                                     train_article_paras, test_article_paras, i))
     return cv_datasets
 
 
