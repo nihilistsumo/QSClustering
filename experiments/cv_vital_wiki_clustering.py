@@ -36,7 +36,7 @@ def do_eval(test_samples, model, max_num_tokens, qc=None, triplet_model=False):
             embeddings = model.emb_model.encode(input_texts, convert_to_tensor=True)
         else:
             texts = s.para_texts
-            query_content = s.category # + s.q.split('enwiki:')[1].replace('%20', ' ')
+            query_content = s.category +'. ' + s.q.split('enwiki:')[1].replace('%20', ' ')
             input_texts = [(query_content, t) for t in texts]
             embeddings = model.qp_model.encode(input_texts, convert_to_tensor=True)
         pred_labels = model.get_clustering(embeddings, k)
@@ -49,8 +49,8 @@ def do_eval(test_samples, model, max_num_tokens, qc=None, triplet_model=False):
 
 def vital_wiki_clustering_single_model(vital_wiki_2cv_data_file,
                                     device,
+                                    loss_name,
                                     query_context_ref=None,
-                                    loss_name='adj',
                                     max_num_tokens=128,
                                     max_grad_norm=1.0,
                                     weight_decay=0.01,
@@ -95,7 +95,7 @@ def vital_wiki_clustering_single_model(vital_wiki_2cv_data_file,
             for idx in tqdm(range(len(train_data_current))):
                 model.train()
                 sample = train_data_current[idx]
-                query_content = sample.category
+                query_content = sample.category +'. ' + sample.q.split('enwiki:')[1].replace('%20', ' ')
                 n = len(sample.paras)
                 k = len(set(sample.para_labels))
                 input_texts = [(query_content, t) for t in sample.para_texts]
@@ -213,10 +213,11 @@ else:
 parser = argparse.ArgumentParser(description='Run query specific clustering experiments on Vital wiki 2-fold cv dataset')
 parser.add_argument('-vd', '--vital_data', help='Path to vital wiki clustering npy file prepared for 2-fold cv',
                     default='D:\\new_cats_data\\QSC_data\\vital_wiki\\vital_wiki_clustering_data_2cv.npy')
-parser.add_argument('-ne', '--experiment', type=int, help='Choose the experiment to run (1: QSC/ 2: baseline)', default=2)
+parser.add_argument('-ne', '--experiment', type=int, help='Choose the experiment to run (1: QSC/ 2: baseline)', default=1)
+parser.add_argument('-ls', '--loss', help='Loss func to use for QSC', default='adj')
 
 args = parser.parse_args()
 if args.experiment == 1:
-    vital_wiki_clustering_single_model(args.vital_data, device)
+    vital_wiki_clustering_single_model(args.vital_data, device, args.loss)
 elif args.experiment == 2:
     vital_wiki_clustering_baseline_sbert_triplet_model(args.vital_data, device)
