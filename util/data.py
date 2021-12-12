@@ -142,6 +142,31 @@ class TRECCAR_Datset(Dataset):
         return batched_samples
 
 
+class TRECCAR_Dataset_for_cv(Dataset):
+    def __init__(self, rev_para_labels, para_texts, training_articles, testing_articles, fold, max_num_paras=35):
+        self.samples = []
+        self.test_samples = []
+        for a in training_articles.keys():
+            paras = training_articles[a][fold]
+            random.shuffle(paras)
+            if len(paras) > max_num_paras:
+                paras = random.sample(paras, max_num_paras)
+            para_labels = [rev_para_labels[p] for p in paras]
+            texts = [para_texts[p] for p in paras]
+            self.samples.append(TRECCAR_sample(a, paras, para_labels, texts))
+        for a in testing_articles.keys():
+            paras = testing_articles[a][fold]
+            para_labels = [rev_para_labels[p] for p in paras]
+            texts = [para_texts[p] for p in paras]
+            self.test_samples.append(TRECCAR_sample(a, paras, para_labels, texts))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        return self.samples[idx]
+
+
 class Vital_Wiki_Dataset(Dataset):
     def __init__(self, vital_cats_data, q_paras, rev_para_qrels, paratext_tsv, max_num_paras):
         self.q_paras = q_paras
@@ -336,6 +361,46 @@ def prepare_vital_wiki_data_for_cv(art_qrels, qrels, paratext_tsv, vital_cats_da
     for i in range(num_folds):
         cv_datasets.append(Vital_Wiki_Dataset_for_cv(rev_para_labels, paratext,
                                                      train_article_paras, test_article_paras, i))
+    return cv_datasets
+
+
+def prepare_treccar_data_for_cv(art_qrels, qrels, paratext_tsv, num_folds=2):
+    page_paras = get_article_qrels(art_qrels)
+    rev_para_labels = get_rev_qrels(qrels)
+    train_article_paras, test_article_paras = {}, {}
+    all_paras = []
+    for article in page_paras.keys():
+        paras = page_paras[article]
+        para_labels = [rev_para_labels[p] for p in paras]
+        para_label_count = {label: para_labels.count(label) for label in para_labels}
+        selected_paras, selected_labels = [], []
+        for i in range(len(paras)):
+            p = paras[i]
+            if para_label_count[para_labels[i]] > 3:
+                selected_paras.append(p)
+                selected_labels.append(para_labels[i])
+        if len(selected_paras) > 0 and len(set(selected_labels)) > 1:
+            all_paras += selected_paras
+            skf = StratifiedKFold(n_splits=num_folds, shuffle=True)
+            for train_indices, test_indices in skf.split(selected_paras, selected_labels):
+                if article in train_article_paras.keys():
+                    train_article_paras[article].append([selected_paras[i] for i in train_indices])
+                else:
+                    train_article_paras[article] = [[selected_paras[i] for i in train_indices]]
+                if article in test_article_paras.keys():
+                    test_article_paras[article].append([selected_paras[i] for i in test_indices])
+                else:
+                    test_article_paras[article] = [[selected_paras[i] for i in test_indices]]
+    all_paras = set(all_paras)
+    paratext = {}
+    with open(paratext_tsv, 'r', encoding='utf-8') as f:
+        for l in f:
+            p = l.split('\t')[0]
+            if p in all_paras:
+                paratext[p] = l.split('\t')[1].strip()
+    cv_datasets = []
+    for i in range(num_folds):
+        cv_datasets.append(TRECCAR_Dataset_for_cv(rev_para_labels, paratext, train_article_paras, test_article_paras, i))
     return cv_datasets
 
 

@@ -10,7 +10,6 @@ import torch.nn as nn
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 from core.clustering import QuerySpecificClusteringModel, SBERTTripletLossModel, get_nmi_loss, \
     get_weighted_adj_rand_loss, QuerySpecificDKM
-from util.data import Vital_Wiki_Dataset, get_article_qrels, get_rev_qrels, prepare_arxiv_data_for_cv
 from tqdm import tqdm, trange
 import json
 import numpy as np
@@ -25,7 +24,7 @@ def put_features_in_device(input_features, device):
             input_features[key] = input_features[key].to(device)
 
 
-def do_eval(test_samples, model, max_num_tokens, qc=None, triplet_model=False):
+def do_eval(test_samples, model, qc=None, triplet_model=False):
     model.eval()
     rand_dict, nmi_dict = {}, {}
     for s in test_samples:
@@ -47,7 +46,7 @@ def do_eval(test_samples, model, max_num_tokens, qc=None, triplet_model=False):
     return rand_dict, nmi_dict
 
 
-def do_eval_dkm_param(test_samples, model, max_num_tokens, qc=None):
+def do_eval_dkm_param(test_samples, model, qc=None):
     model.eval()
     rand_dict, nmi_dict = {}, {}
     for s in test_samples:
@@ -95,9 +94,9 @@ def vital_wiki_clustering_single_model(vital_wiki_2cv_data_file,
         opt = AdamW(optimizer_grouped_parameters, lr=lrate)
         schd = transformers.get_linear_schedule_with_warmup(opt, warmup, num_epochs * num_train_steps)
         if query_context_ref is not None:
-            test_rand, test_nmi = do_eval(test_data_current, model, max_num_tokens, qc)
+            test_rand, test_nmi = do_eval(test_data_current, model, qc)
         else:
-            test_rand, test_nmi = do_eval(test_data_current, model, max_num_tokens)
+            test_rand, test_nmi = do_eval(test_data_current, model)
         print('\nFold %d Initial Test evaluation' % (i+1))
         print('Mean RAND %.4f +- %.4f, NMI %.4f +- %.4f' % (np.mean(list(test_rand.values())),
                                                             np.std(list(test_rand.values()), ddof=1) / np.sqrt(len(test_rand.keys())),
@@ -129,9 +128,9 @@ def vital_wiki_clustering_single_model(vital_wiki_2cv_data_file,
         print('Evaluation Fold %d' % (i+1))
         print('=================')
         if query_context_ref is not None:
-            test_rand, test_nmi = do_eval(test_data_current, model, max_num_tokens, qc)
+            test_rand, test_nmi = do_eval(test_data_current, model, qc)
         else:
-            test_rand, test_nmi = do_eval(test_data_current, model, max_num_tokens)
+            test_rand, test_nmi = do_eval(test_data_current, model)
         print('Mean RAND %.4f +- %.4f, NMI %.4f +- %.4f' % (np.mean(list(test_rand.values())),
                                                             np.std(list(test_rand.values()), ddof=1) / np.sqrt(len(test_rand.keys())),
                                                             np.mean(list(test_nmi.values())),
@@ -170,9 +169,9 @@ def vital_wiki_clustering_dkm_param_model(vital_wiki_2cv_data_file,
         opt = AdamW(optimizer_grouped_parameters, lr=lrate)
         schd = transformers.get_linear_schedule_with_warmup(opt, warmup, num_epochs * num_train_steps)
         if query_context_ref is not None:
-            test_rand, test_nmi = do_eval_dkm_param(test_data_current, model, max_num_tokens, qc)
+            test_rand, test_nmi = do_eval_dkm_param(test_data_current, model, qc)
         else:
-            test_rand, test_nmi = do_eval_dkm_param(test_data_current, model, max_num_tokens)
+            test_rand, test_nmi = do_eval_dkm_param(test_data_current, model)
         print('\nFold %d Initial Test evaluation' % (i+1))
         print('Mean RAND %.4f +- %.4f, NMI %.4f +- %.4f' % (np.mean(list(test_rand.values())),
                                                             np.std(list(test_rand.values()), ddof=1) / np.sqrt(len(test_rand.keys())),
@@ -201,9 +200,9 @@ def vital_wiki_clustering_dkm_param_model(vital_wiki_2cv_data_file,
         print('Evaluation Fold %d' % (i+1))
         print('=================')
         if query_context_ref is not None:
-            test_rand, test_nmi = do_eval_dkm_param(test_data_current, model, max_num_tokens, qc)
+            test_rand, test_nmi = do_eval_dkm_param(test_data_current, model, qc)
         else:
-            test_rand, test_nmi = do_eval_dkm_param(test_data_current, model, max_num_tokens)
+            test_rand, test_nmi = do_eval_dkm_param(test_data_current, model)
         print('Mean RAND %.4f +- %.4f, NMI %.4f +- %.4f' % (np.mean(list(test_rand.values())),
                                                             np.std(list(test_rand.values()), ddof=1) / np.sqrt(len(test_rand.keys())),
                                                             np.mean(list(test_nmi.values())),
@@ -238,7 +237,7 @@ def vital_wiki_clustering_baseline_sbert_triplet_model(vital_wiki_2cv_data_file,
         ]
         opt = AdamW(optimizer_grouped_parameters, lr=lrate)
         schd = transformers.get_linear_schedule_with_warmup(opt, warmup, num_epochs * num_train_steps)
-        test_rand, test_nmi = do_eval(test_data_current, model, max_num_tokens, triplet_model=True)
+        test_rand, test_nmi = do_eval(test_data_current, model, triplet_model=True)
         print('\nFold %d Initial Test evaluation' % (i+1))
         print('Mean RAND %.4f +- %.4f, NMI %.4f +- %.4f' % (np.mean(list(test_rand.values())),
                                                             np.std(list(test_rand.values()), ddof=1) / np.sqrt(len(test_rand.keys())),
@@ -267,7 +266,7 @@ def vital_wiki_clustering_baseline_sbert_triplet_model(vital_wiki_2cv_data_file,
                     schd.step()
         print('Evaluation Fold %d' % (i+1))
         print('=================')
-        test_rand, test_nmi = do_eval(test_data_current, model, max_num_tokens, triplet_model=True)
+        test_rand, test_nmi = do_eval(test_data_current, model, triplet_model=True)
         print('Mean RAND %.4f +- %.4f, NMI %.4f +- %.4f' % (np.mean(list(test_rand.values())),
                                                             np.std(list(test_rand.values()), ddof=1) / np.sqrt(len(test_rand.keys())),
                                                             np.mean(list(test_nmi.values())),
