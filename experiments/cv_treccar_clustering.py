@@ -209,7 +209,7 @@ def treccar_clustering_baseline_sbert_triplet_model(treccar_2cv_data_file,
         if output_path is not None:
             print('Saving the trained model...')
             torch.save(model.state_dict(), output_path+'_fold'+str(i+1)+'.model')
-            model = QuerySpecificClusteringModel(emb_model_name, emb_dim, device, max_num_tokens)
+            model = SBERTTripletLossModel(emb_model_name, device, max_num_tokens, triplet_margin)
             model.load_state_dict(torch.load(output_path+'_fold'+str(i+1)+'.model'))
         print('Evaluation Fold %d' % (i+1))
         print('=================')
