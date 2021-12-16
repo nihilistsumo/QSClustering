@@ -238,42 +238,39 @@ def get_triplet_texts_from_sample(sample):
     return input_texts
 
 
-if torch.cuda.is_available():
-    device = torch.device('cuda')
-    print('CUDA is available and using device: '+str(device))
-else:
-    device = torch.device('cpu')
-    print('CUDA not available, using device: '+str(device))
-    max_num_tokens = 128,
-    max_grad_norm = 1.0,
-    weight_decay = 0.01,
-    warmup = 1000,
-    lrate = 2e-5,
-    num_epochs = 75,
-    emb_model_name = 'sentence-transformers/all-MiniLM-L6-v2',
-    emb_dim = 256
-parser = argparse.ArgumentParser(description='Run query specific clustering experiments on TRECCAR 2-fold cv dataset')
-parser.add_argument('-vd', '--vital_data', help='Path to TRECCAR clustering npy file prepared for 2-fold cv',
-                    default='D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\treccar_clustering_data_by1train_2cv.npy')
-parser.add_argument('-op', '--output_path', help='Path to save the trained model', default=None)
-parser.add_argument('-ne', '--experiment', type=int, help='Choose the experiment to run (1: QSC/ 2: baseline)', default=1)
-parser.add_argument('-ls', '--loss', help='Loss func to use for QSC', default='adj')
-parser.add_argument('-qc', '--query_con', help='Path to query-context json file', default=None)
-parser.add_argument('-mn', '--model_name', help='SBERT embedding model name', default='sentence-transformers/all-MiniLM-L6-v2')
-parser.add_argument('-nt', '--max_num_tokens', help='Max no. of tokens', default=128)
-parser.add_argument('-gn', '--max_grad_norm', help='Max gradient norm', default=1.0)
-parser.add_argument('-wd', '--weight_decay', default=0.01)
-parser.add_argument('-wu', '--warmup', default=1000)
-parser.add_argument('-lr', '--lrate', default=2e-5)
-parser.add_argument('-ep', '--epochs', default=75)
-parser.add_argument('-ed', '--emb_dim', default=256)
+def main():
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+        print('CUDA is available and using device: '+str(device))
+    else:
+        device = torch.device('cpu')
+        print('CUDA not available, using device: '+str(device))
+    parser = argparse.ArgumentParser(description='Run query specific clustering experiments on TRECCAR 2-fold cv dataset')
+    parser.add_argument('-vd', '--vital_data', help='Path to TRECCAR clustering npy file prepared for 2-fold cv',
+                        default='D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\treccar_clustering_data_by1train_2cv.npy')
+    parser.add_argument('-op', '--output_path', help='Path to save the trained model', default=None)
+    parser.add_argument('-ne', '--experiment', type=int, help='Choose the experiment to run (1: QSC/ 2: baseline)', default=1)
+    parser.add_argument('-ls', '--loss', help='Loss func to use for QSC', default='adj')
+    parser.add_argument('-qc', '--query_con', help='Path to query-context json file', default=None)
+    parser.add_argument('-mn', '--model_name', help='SBERT embedding model name', default='sentence-transformers/all-MiniLM-L6-v2')
+    parser.add_argument('-nt', '--max_num_tokens', help='Max no. of tokens', default=128)
+    parser.add_argument('-gn', '--max_grad_norm', help='Max gradient norm', default=1.0)
+    parser.add_argument('-wd', '--weight_decay', default=0.01)
+    parser.add_argument('-wu', '--warmup', default=1000)
+    parser.add_argument('-lr', '--lrate', default=2e-5)
+    parser.add_argument('-ep', '--epochs', default=75)
+    parser.add_argument('-ed', '--emb_dim', default=256)
 
-args = parser.parse_args()
-if args.experiment == 1:
-    treccar_clustering_single_model(args.vital_data, device, args.loss, args.query_con, args.max_num_tokens,
-                                    args.max_grad_norm, args.weight_decay, args.warmup, args.lrate, args.epochs,
-                                    args.model_name, args.emb_dim, args.output_path)
-elif args.experiment == 2:
-    treccar_clustering_baseline_sbert_triplet_model(args.vital_data, device, args.max_num_tokens, args.max_grad_norm,
-                                                    args.weight_decay, args.warmup, args.lrate, args.epochs,
-                                                    args.model_name, args.emb_dim, args.output_path)
+    args = parser.parse_args()
+    if args.experiment == 1:
+        treccar_clustering_single_model(args.vital_data, device, args.loss, args.query_con, args.max_num_tokens,
+                                        args.max_grad_norm, args.weight_decay, args.warmup, args.lrate, args.epochs,
+                                        args.model_name, args.emb_dim, args.output_path)
+    elif args.experiment == 2:
+        treccar_clustering_baseline_sbert_triplet_model(args.vital_data, device, args.max_num_tokens, args.max_grad_norm,
+                                                        args.weight_decay, args.warmup, args.lrate, args.epochs,
+                                                        args.model_name, args.emb_dim, args.output_path)
+
+
+if __name__ == '__main__':
+    main()
