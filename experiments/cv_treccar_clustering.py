@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 import torch.nn as nn
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 from core.clustering import QuerySpecificClusteringModel, SBERTTripletLossModel, get_nmi_loss, \
-    get_weighted_adj_rand_loss, QuerySpecificDKM
+    get_weighted_adj_rand_loss, QuerySpecificDKM, QuerySpecificClusteringModelWithSection
 from tqdm import tqdm, trange
 import json
 import numpy as np
@@ -105,6 +105,112 @@ def treccar_clustering_single_model(treccar_2cv_data_file,
                 #print(GPUtil.showUtilization())
                 mc, ma = model(input_features, k)
                 loss = loss_func(ma, sample.para_labels, device)
+                loss.backward()
+                running_loss += loss.item()
+                #print(batch.q + ' %d paras, Loss %.4f' % (len(batch.paras), loss.detach().item()))
+                nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                opt.step()
+                opt.zero_grad()
+                schd.step()
+            if query_context_ref is not None:
+                test_rand, test_nmi = do_eval(test_data_current, model, qc)
+            else:
+                test_rand, test_nmi = do_eval(test_data_current, model)
+            print('Epoch %d, mean loss: %.4f, mean RAND %.4f +- %.4f, mean NMI %.4f +- %.4f' % (epoch + 1,
+                                                                                                running_loss / len(train_data_current),
+                                                                                                np.mean(list(test_rand.values())),
+                                                                                                np.std(list(test_rand.values()), ddof=1) / np.sqrt(len(test_rand.keys())),
+                                                                                                np.mean(list(test_nmi.values())),
+                                                                                                np.std(list(test_nmi.values()), ddof=1) / np.sqrt(len(test_nmi.keys()))))
+        if output_path is not None:
+            print('Saving the trained model...')
+            torch.save(model.state_dict(), output_path+'_fold'+str(i+1)+'.model')
+            model = QuerySpecificClusteringModel(emb_model_name, emb_dim, device, max_num_tokens)
+            model.load_state_dict(torch.load(output_path+'_fold'+str(i+1)+'.model'))
+        print('Evaluation Fold %d' % (i+1))
+        print('=================')
+        if query_context_ref is not None:
+            test_rand, test_nmi = do_eval(test_data_current, model, qc)
+        else:
+            test_rand, test_nmi = do_eval(test_data_current, model)
+        print('Mean RAND %.4f +- %.4f, NMI %.4f +- %.4f' % (np.mean(list(test_rand.values())),
+                                                            np.std(list(test_rand.values()), ddof=1) / np.sqrt(len(test_rand.keys())),
+                                                            np.mean(list(test_nmi.values())),
+                                                            np.std(list(test_nmi.values()), ddof=1) / np.sqrt(len(test_nmi.keys()))))
+
+
+def treccar_clustering_single_model_with_sections(treccar_2cv_data_file,
+                                    device,
+                                    clustering_loss_name,
+                                    query_context_ref,
+                                    max_num_tokens,
+                                    max_grad_norm,
+                                    weight_decay,
+                                    warmup,
+                                    lrate,
+                                    num_epochs,
+                                    emb_model_name,
+                                    emb_dim,
+                                    output_path):
+    if query_context_ref is not None:
+        with open(query_context_ref, 'r') as f:
+            qc = json.load(f)
+    cv_datasets = np.load(treccar_2cv_data_file, allow_pickle=True)[()]['data']
+    alpha = 0.005
+    beta = 0.005
+    for i in range(len(cv_datasets)):
+        train_data_current = cv_datasets[i]
+        test_data_current = train_data_current.test_samples
+        num_steps_per_epoch = len(train_data_current)
+        num_train_steps = num_epochs * num_steps_per_epoch
+        model = QuerySpecificClusteringModelWithSection(emb_model_name, emb_dim, device, max_num_tokens)
+        model_params = list(model.named_parameters())
+        no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
+        optimizer_grouped_parameters = [
+            {'params': [p for n, p in model_params if not any(nd in n for nd in no_decay)],
+            'weight_decay': weight_decay},
+            {'params': [p for n, p in model_params if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+        ]
+        opt = AdamW(optimizer_grouped_parameters, lr=lrate)
+        schd = transformers.get_linear_schedule_with_warmup(opt, warmup, num_epochs * num_train_steps)
+        if query_context_ref is not None:
+            test_rand, test_nmi = do_eval(test_data_current, model, qc)
+        else:
+            test_rand, test_nmi = do_eval(test_data_current, model)
+        print('\nFold %d Initial Test evaluation' % (i+1))
+        print('Mean RAND %.4f +- %.4f, NMI %.4f +- %.4f' % (np.mean(list(test_rand.values())),
+                                                            np.std(list(test_rand.values()), ddof=1) / np.sqrt(len(test_rand.keys())),
+                                                            np.mean(list(test_nmi.values())),
+                                                            np.std(list(test_nmi.values()), ddof=1) / np.sqrt(len(test_nmi.keys()))))
+        if clustering_loss_name == 'nmi':
+            cl_loss_func = get_nmi_loss
+        else:
+            cl_loss_func = get_weighted_adj_rand_loss
+        for epoch in tqdm(range(num_epochs)):
+            running_loss = 0
+            for idx in tqdm(range(len(train_data_current))):
+                model.train()
+                sample = train_data_current[idx]
+                query_content = sample.q.split('enwiki:')[1].replace('%20', ' ')
+                n = len(sample.paras)
+                k = len(set(sample.para_labels))
+                input_texts = [(query_content, t) for t in sample.para_texts]
+                input_features = model.qp_model.tokenize(input_texts)
+                put_features_in_device(input_features, device)
+                section_texts = []
+                for s in sample.para_labels:
+                    if '/' in s:
+                        section_texts.append((query_content, s.split('/')[1].replace('%20', ' ')))
+                    else:
+                        section_texts.append((query_content, query_content))
+                section_features = model.qp_model.tokenize(section_texts)
+                put_features_in_device(section_features, device)
+                #print(GPUtil.showUtilization())
+                mc, ma, qp_emb, qs_emb = model(input_features, section_features, k)
+                clustering_loss = cl_loss_func(ma, sample.para_labels, device)
+                classification_loss = torch.sum((qp_emb - qs_emb).pow(2).sum(1).sqrt())
+                section_emb_reg = torch.sum(torch.cdist(qs_emb, qs_emb, p=2.0)) / k ** 2
+                loss = clustering_loss + alpha * classification_loss - beta * section_emb_reg
                 loss.backward()
                 running_loss += loss.item()
                 #print(batch.q + ' %d paras, Loss %.4f' % (len(batch.paras), loss.detach().item()))
@@ -249,7 +355,7 @@ def main():
     parser.add_argument('-vd', '--vital_data', help='Path to TRECCAR clustering npy file prepared for 2-fold cv',
                         default='D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\treccar_clustering_data_by1train_2cv.npy')
     parser.add_argument('-op', '--output_path', help='Path to save the trained model', default=None)
-    parser.add_argument('-ne', '--experiment', type=int, help='Choose the experiment to run (1: QSC/ 2: baseline)', default=1)
+    parser.add_argument('-ne', '--experiment', type=int, help='Choose the experiment to run (1: QSC/ 2: QSC section/ 3: baseline)', default=2)
     parser.add_argument('-ls', '--loss', help='Loss func to use for QSC', default='adj')
     parser.add_argument('-qc', '--query_con', help='Path to query-context json file', default=None)
     parser.add_argument('-mn', '--model_name', help='SBERT embedding model name', default='sentence-transformers/all-MiniLM-L6-v2')
@@ -267,6 +373,10 @@ def main():
                                         args.max_grad_norm, args.weight_decay, args.warmup, args.lrate, args.epochs,
                                         args.model_name, args.emb_dim, args.output_path)
     elif args.experiment == 2:
+        treccar_clustering_single_model_with_sections(args.vital_data, device, args.loss, args.query_con, args.max_num_tokens,
+                                        args.max_grad_norm, args.weight_decay, args.warmup, args.lrate, args.epochs,
+                                        args.model_name, args.emb_dim, args.output_path)
+    elif args.experiment == 3:
         treccar_clustering_baseline_sbert_triplet_model(args.vital_data, device, args.max_num_tokens, args.max_grad_norm,
                                                         args.weight_decay, args.warmup, args.lrate, args.epochs,
                                                         args.model_name, args.emb_dim, args.output_path)

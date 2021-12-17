@@ -183,6 +183,34 @@ class QuerySpecificClusteringModel(nn.Module):
         return pred_labels
 
 
+class QuerySpecificClusteringModelWithSection(nn.Module):
+    def __init__(self, trans_model_name, emb_dim, device, max_len):
+        super(QuerySpecificClusteringModelWithSection, self).__init__()
+        emb_model = models.Transformer(trans_model_name, max_seq_length=max_len)
+        pool_model = models.Pooling(emb_model.get_word_embedding_dimension())
+        dense_model = models.Dense(in_features=pool_model.get_sentence_embedding_dimension(), out_features=emb_dim, activation_function=nn.Tanh())
+        self.qp_model = SentenceTransformer(modules=[emb_model, pool_model]).to(device)
+        self.dkm = DKM()
+
+    def forward(self, input_features, section_features, k):
+        self.qp = self.qp_model(input_features)['sentence_embedding']
+        self.qs = self.qp_model(section_features)['sentence_embedding']
+        init_c = self.qp[random.sample(range(self.qp.shape[0]), k)].detach().clone()
+        self.C, self.a = self.dkm(self.qp, init_c)
+        return self.C, self.a, self.qp, self.qs
+
+    def get_embedding(self, input_features):
+        self.qp = self.qp_model(input_features)['sentence_embedding']
+        return self.qp
+
+    def get_clustering(self, embeddings, k):
+        #self.qp = self.qp_model(input_features)['sentence_embedding']
+        init_c = embeddings[random.sample(range(embeddings.shape[0]), k)].detach().clone()
+        self.C, self.a = self.dkm(embeddings, init_c)
+        pred_labels = torch.argmax(self.a, dim=1).detach().cpu().numpy()
+        return pred_labels
+
+
 class SBERTTripletLossModel(nn.Module):
     def __init__(self, trans_model_name, device, max_len, triplet_margin):
         super(SBERTTripletLossModel, self).__init__()
