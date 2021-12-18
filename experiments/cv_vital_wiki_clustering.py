@@ -389,7 +389,7 @@ def main():
     parser = argparse.ArgumentParser(description='Run query specific clustering experiments on Vital wiki 2-fold cv dataset')
     parser.add_argument('-vd', '--vital_data', help='Path to vital wiki clustering npy file prepared for 2-fold cv',
                         default='D:\\new_cats_data\\QSC_data\\vital_wiki\\vital_wiki_clustering_data_2cv.npy')
-    parser.add_argument('-ne', '--experiment', type=int, help='Choose the experiment to run (1: QSC/ 2: QSC section/ 3: DKM param/ 4: baseline)', default=2)
+    parser.add_argument('-ne', '--experiment', type=int, help='Choose the experiment to run (1: QSC/ 2: QSC section/ 3: DKM param/ 4: baseline)', default=1)
     parser.add_argument('-ls', '--loss', help='Loss func to use for QSC', default='adj')
 
     args = parser.parse_args()

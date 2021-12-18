@@ -1,6 +1,7 @@
 import json
 import math
 import random
+from tqdm import tqdm
 
 from torch.utils.data import Dataset
 from rank_bm25 import BM25Okapi
@@ -244,6 +245,37 @@ class Vital_Wiki_Dataset_for_cv(Dataset):
         return self.samples[idx]
 
 
+class Vital_Wiki_Dataset_for_cv_unseen(Dataset):
+    def __init__(self, rev_para_labels, para_texts, train_data, test_data, fold, max_num_paras=35):
+        self.samples = []
+        self.test_samples = []
+        current_fold_train_data = train_data[fold]
+        current_fold_test_data = test_data[fold]
+        for d in current_fold_train_data:
+            article = d['article']
+            cat = d['category']
+            paras = d['paras']
+            random.shuffle(paras)
+            if len(paras) > max_num_paras:
+                paras = random.sample(paras, max_num_paras)
+            para_labels = [rev_para_labels[p] for p in paras]
+            texts = [para_texts[p] for p in paras]
+            self.samples.append(Vital_Wiki_sample(article, cat, paras, para_labels, texts))
+        for d in current_fold_test_data:
+            article = d['article']
+            cat = d['category']
+            paras = d['paras']
+            para_labels = [rev_para_labels[p] for p in paras]
+            texts = [para_texts[p] for p in paras]
+            self.test_samples.append(Vital_Wiki_sample(article, cat, paras, para_labels, texts))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        return self.samples[idx]
+
+
 class Arxiv_Dataset(Dataset):
     def __init__(self, arxiv_, training_ids, testing_ids, fold, max_num_samples_per_query=1000, max_num_papers=35, max_k=5):
         self.arxiv_data = {}
@@ -361,6 +393,66 @@ def prepare_vital_wiki_data_for_cv(art_qrels, qrels, paratext_tsv, vital_cats_da
     for i in range(num_folds):
         cv_datasets.append(Vital_Wiki_Dataset_for_cv(rev_para_labels, paratext,
                                                      train_article_paras, test_article_paras, i))
+    return cv_datasets
+
+
+def prepare_vital_wiki_data_for_cv_unseen_queries(art_qrels, qrels, paratext_tsv, vital_cats_data, num_folds=5):
+    page_paras = get_article_qrels(art_qrels)
+    rev_para_labels = get_rev_qrels(qrels)
+    with open(vital_cats_data, 'r') as f:
+        cats = json.load(f)
+    selected_vital_cat_labels = []
+    selected_articles = []
+    selected_page_paras = {}
+    all_selected_paras = []
+    for d in cats:
+        for c in d.keys():
+            for k in tqdm(range(len(d[c]))):
+                a = d[c][k]
+                article = 'enwiki:' + a
+                if article in page_paras.keys():
+                    paras = page_paras[article]
+                    para_labels = [rev_para_labels[p] for p in paras]
+                    para_label_count = {label: para_labels.count(label) for label in para_labels}
+                    selected_paras, selected_labels = [], []
+                    for i in range(len(paras)):
+                        p = paras[i]
+                        if para_label_count[para_labels[i]] > 3:
+                            selected_paras.append(p)
+                            selected_labels.append(para_labels[i])
+                    if len(selected_paras) > 0 and len(set(selected_labels)) > 1:
+                        selected_page_paras[article] = selected_paras
+                        all_selected_paras += selected_paras
+                        selected_articles.append(article)
+                        selected_vital_cat_labels.append(c)
+    paratext = {}
+    all_selected_paras = set(all_selected_paras)
+    with open(paratext_tsv, 'r', encoding='utf-8') as f:
+        for l in f:
+            p = l.split('\t')[0]
+            if p in all_selected_paras:
+                paratext[p] = l.split('\t')[1].strip()
+    print('Para texts read')
+    skf = StratifiedKFold(n_splits=num_folds, shuffle=True)
+    print('k-fold data generating')
+    train_data, test_data = [], []
+    for train_indices, test_indices in skf.split(selected_articles, selected_vital_cat_labels):
+        print('%d train, %d test samples' % (len(train_indices), len(test_indices)))
+        current_fold_train_data, current_fold_test_data = [], []
+        for i in train_indices:
+            a = selected_articles[i]
+            c = selected_vital_cat_labels[i]
+            current_fold_train_data.append({'article': a, 'category': c, 'paras': selected_page_paras[a]})
+        for j in test_indices:
+            a = selected_articles[j]
+            c = selected_vital_cat_labels[j]
+            current_fold_test_data.append({'article': a, 'category': c, 'paras': selected_page_paras[a]})
+        train_data.append(current_fold_train_data)
+        test_data.append(current_fold_test_data)
+
+    cv_datasets = []
+    for i in range(num_folds):
+        cv_datasets.append(Vital_Wiki_Dataset_for_cv_unseen(rev_para_labels, paratext, train_data, test_data, i))
     return cv_datasets
 
 
