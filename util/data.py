@@ -168,6 +168,32 @@ class TRECCAR_Dataset_for_cv(Dataset):
         return self.samples[idx]
 
 
+class TRECCAR_Dataset_full_train_and_by1(Dataset):
+    def __init__(self, rev_para_labels, para_texts, training_articles, val_articles, testing_articles, fold, max_num_paras=35):
+        self.samples = []
+        self.val_samples = []
+        self.test_samples = []
+        for a in training_articles.keys():
+            paras = training_articles[a]
+            random.shuffle(paras)
+            if len(paras) > max_num_paras:
+                paras = random.sample(paras, max_num_paras)
+            para_labels = [rev_para_labels[p] for p in paras]
+            texts = [para_texts[p] for p in paras]
+            self.samples.append(TRECCAR_sample(a, paras, para_labels, texts))
+        for a in testing_articles.keys():
+            paras = testing_articles[a]
+            para_labels = [rev_para_labels[p] for p in paras]
+            texts = [para_texts[p] for p in paras]
+            self.test_samples.append(TRECCAR_sample(a, paras, para_labels, texts))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        return self.samples[idx]
+
+
 class Vital_Wiki_Dataset(Dataset):
     def __init__(self, vital_cats_data, q_paras, rev_para_qrels, paratext_tsv, max_num_paras):
         self.q_paras = q_paras
@@ -494,6 +520,20 @@ def prepare_treccar_data_for_cv(art_qrels, qrels, paratext_tsv, num_folds=2):
     for i in range(num_folds):
         cv_datasets.append(TRECCAR_Dataset_for_cv(rev_para_labels, paratext, train_article_paras, test_article_paras, i))
     return cv_datasets
+
+
+def prepare_treccar_data_unseen_full(train_art_qrels, train_qrels, train_paratext, by1train_art_qrels, by1train_qrels,
+                                     by1train_paratext, by1test_art_qrels, by1test_qrels, by1test_paratext):
+    page_paras = get_article_qrels(train_art_qrels)
+    page_paras_by1train = get_article_qrels(by1train_art_qrels)
+    page_paras_by1test = get_article_qrels(by1test_art_qrels)
+    rev_para_labels = get_rev_qrels(train_qrels)
+    rev_para_labels_by1train = get_rev_qrels(by1train_qrels)
+    rev_para_labels_by1test = get_rev_qrels(by1test_qrels)
+    for k in rev_para_labels_by1train.keys():
+        rev_para_labels[k] = rev_para_labels_by1train[k]
+    for k in rev_para_labels_by1test.keys():
+        rev_para_labels[k] = rev_para_labels_by1test[k]
 
 
 def separate_multi_batch(sample, max_num_paras):

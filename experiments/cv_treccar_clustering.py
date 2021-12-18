@@ -352,7 +352,7 @@ def main():
         device = torch.device('cpu')
         print('CUDA not available, using device: '+str(device))
     parser = argparse.ArgumentParser(description='Run query specific clustering experiments on TRECCAR 2-fold cv dataset')
-    parser.add_argument('-vd', '--vital_data', help='Path to TRECCAR clustering npy file prepared for 2-fold cv',
+    parser.add_argument('-td', '--treccar_data', help='Path to TRECCAR clustering npy file prepared for 2-fold cv',
                         default='D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\treccar_clustering_data_by1train_2cv.npy')
     parser.add_argument('-op', '--output_path', help='Path to save the trained model', default=None)
     parser.add_argument('-ne', '--experiment', type=int, help='Choose the experiment to run (1: QSC/ 2: QSC section/ 3: baseline)', default=2)
@@ -369,15 +369,15 @@ def main():
 
     args = parser.parse_args()
     if args.experiment == 1:
-        treccar_clustering_single_model(args.vital_data, device, args.loss, args.query_con, args.max_num_tokens,
+        treccar_clustering_single_model(args.treccar_data, device, args.loss, args.query_con, args.max_num_tokens,
                                         args.max_grad_norm, args.weight_decay, args.warmup, args.lrate, args.epochs,
                                         args.model_name, args.emb_dim, args.output_path)
     elif args.experiment == 2:
-        treccar_clustering_single_model_with_sections(args.vital_data, device, args.loss, args.query_con, args.max_num_tokens,
+        treccar_clustering_single_model_with_sections(args.treccar_data, device, args.loss, args.query_con, args.max_num_tokens,
                                         args.max_grad_norm, args.weight_decay, args.warmup, args.lrate, args.epochs,
                                         args.model_name, args.emb_dim, args.output_path)
     elif args.experiment == 3:
-        treccar_clustering_baseline_sbert_triplet_model(args.vital_data, device, args.max_num_tokens, args.max_grad_norm,
+        treccar_clustering_baseline_sbert_triplet_model(args.treccar_data, device, args.max_num_tokens, args.max_grad_norm,
                                                         args.weight_decay, args.warmup, args.lrate, args.epochs,
                                                         args.model_name, args.emb_dim, args.output_path)
 
