@@ -169,20 +169,25 @@ class TRECCAR_Dataset_for_cv(Dataset):
 
 
 class TRECCAR_Dataset_full_train_and_by1(Dataset):
-    def __init__(self, rev_para_labels, para_texts, training_articles, val_articles, testing_articles, fold, max_num_paras=35):
+    def __init__(self, rev_para_labels, para_texts, training_articles, val_articles, testing_articles):
         self.samples = []
         self.val_samples = []
         self.test_samples = []
         for a in training_articles.keys():
             paras = training_articles[a]
             random.shuffle(paras)
-            if len(paras) > max_num_paras:
-                paras = random.sample(paras, max_num_paras)
             para_labels = [rev_para_labels[p] for p in paras]
             texts = [para_texts[p] for p in paras]
             self.samples.append(TRECCAR_sample(a, paras, para_labels, texts))
+        for a in val_articles.keys():
+            paras = val_articles[a]
+            random.shuffle(paras)
+            para_labels = [rev_para_labels[p] for p in paras]
+            texts = [para_texts[p] for p in paras]
+            self.val_samples.append(TRECCAR_sample(a, paras, para_labels, texts))
         for a in testing_articles.keys():
             paras = testing_articles[a]
+            random.shuffle(paras)
             para_labels = [rev_para_labels[p] for p in paras]
             texts = [para_texts[p] for p in paras]
             self.test_samples.append(TRECCAR_sample(a, paras, para_labels, texts))
@@ -271,6 +276,23 @@ class Vital_Wiki_Dataset_for_cv(Dataset):
         return self.samples[idx]
 
 
+def manual_selection_of_paras_for_highly_unbalanced_article(article, paras, labels, max_num_paras):
+    desired_num_paras_per_label = max_num_paras // len(set(labels))
+    label_para_dict = {}
+    for i in range(len(paras)):
+        if labels[i] not in label_para_dict.keys():
+            label_para_dict[labels[i]] = [paras[i]]
+        else:
+            label_para_dict[labels[i]].append(paras[i])
+    selected_paras = []
+    for l in label_para_dict.keys():
+        if len(label_para_dict[l]) < desired_num_paras_per_label:
+            selected_paras += label_para_dict[l]
+        else:
+            selected_paras += random.sample(label_para_dict[l], desired_num_paras_per_label)
+    return selected_paras
+
+
 class Vital_Wiki_Dataset_for_cv_unseen(Dataset):
     def __init__(self, rev_para_labels, para_texts, train_data, test_data, fold, max_num_paras=35):
         self.samples = []
@@ -282,8 +304,20 @@ class Vital_Wiki_Dataset_for_cv_unseen(Dataset):
             cat = d['category']
             paras = d['paras']
             random.shuffle(paras)
+            para_labels_original = [rev_para_labels[p] for p in d['paras']]
             if len(paras) > max_num_paras:
                 paras = random.sample(paras, max_num_paras)
+                para_labels = [rev_para_labels[p] for p in paras]
+                i = 0
+                while len(set(para_labels)) == 1:
+                    paras = random.sample(paras, max_num_paras)
+                    para_labels = [rev_para_labels[p] for p in paras]
+                    i += 1
+                    if i > 1000:
+                        print('Calling expensive sampler for article: ' + article)
+                        paras = manual_selection_of_paras_for_highly_unbalanced_article(article, d['paras'],
+                                                                                para_labels_original, max_num_paras)
+                        break
             para_labels = [rev_para_labels[p] for p in paras]
             texts = [para_texts[p] for p in paras]
             self.samples.append(Vital_Wiki_sample(article, cat, paras, para_labels, texts))
@@ -523,7 +557,7 @@ def prepare_treccar_data_for_cv(art_qrels, qrels, paratext_tsv, num_folds=2):
 
 
 def prepare_treccar_data_unseen_full(train_art_qrels, train_qrels, train_paratext, by1train_art_qrels, by1train_qrels,
-                                     by1train_paratext, by1test_art_qrels, by1test_qrels, by1test_paratext):
+                                     by1train_paratext, by1test_art_qrels, by1test_qrels, by1test_paratext, max_num_paras=35):
     page_paras = get_article_qrels(train_art_qrels)
     page_paras_by1train = get_article_qrels(by1train_art_qrels)
     page_paras_by1test = get_article_qrels(by1test_art_qrels)
@@ -534,6 +568,63 @@ def prepare_treccar_data_unseen_full(train_art_qrels, train_qrels, train_paratex
         rev_para_labels[k] = rev_para_labels_by1train[k]
     for k in rev_para_labels_by1test.keys():
         rev_para_labels[k] = rev_para_labels_by1test[k]
+    training_articles, val_articles, test_articles = {}, {}, {}
+    all_paras = []
+    print('Building training set')
+    articles = list(page_paras.keys())
+    for ar in tqdm(range(len(articles))):
+        article = articles[ar]
+        paras = page_paras[article]
+        para_labels = [rev_para_labels[p] for p in paras]
+        para_label_count = {label: para_labels.count(label) for label in para_labels}
+        selected_paras, selected_labels = [], []
+        for i in range(len(paras)):
+            p = paras[i]
+            if para_label_count[para_labels[i]] > 3:
+                selected_paras.append(p)
+                selected_labels.append(para_labels[i])
+        if len(selected_paras) > 0 and len(set(selected_labels)) > 1:
+            if len(selected_paras) > max_num_paras:
+                sampled_selected_paras = random.sample(selected_paras, max_num_paras)
+                labels = [rev_para_labels[p] for p in sampled_selected_paras]
+                i = 0
+                while len(set(labels)) == 1:
+                    sampled_selected_paras = random.sample(selected_paras, max_num_paras)
+                    labels = [rev_para_labels[p] for p in sampled_selected_paras]
+                    i += 1
+                    if i > 10000:
+                        print('Could not generate well-distributed sample from query: ' + article)
+                        break
+                if i > 10000:
+                    continue
+                selected_paras = sampled_selected_paras
+            training_articles[article] = selected_paras
+            all_paras += selected_paras
+    for article in page_paras_by1train.keys():
+        val_articles[article] = page_paras_by1train[article]
+        all_paras += page_paras_by1train[article]
+    for article in page_paras_by1test.keys():
+        test_articles[article] = page_paras_by1test[article]
+        all_paras += page_paras_by1test[article]
+    all_paras = set(all_paras)
+    paratext = {}
+    with open(train_paratext, 'r', encoding='utf-8') as f:
+        for l in f:
+            p = l.split('\t')[0]
+            if p in all_paras:
+                paratext[p] = l.split('\t')[1].strip()
+    with open(by1train_paratext, 'r', encoding='utf-8') as f:
+        for l in f:
+            p = l.split('\t')[0]
+            if p in all_paras:
+                paratext[p] = l.split('\t')[1].strip()
+    with open(by1test_paratext, 'r', encoding='utf-8') as f:
+        for l in f:
+            p = l.split('\t')[0]
+            if p in all_paras:
+                paratext[p] = l.split('\t')[1].strip()
+    dataset = TRECCAR_Dataset_full_train_and_by1(rev_para_labels, paratext, training_articles, val_articles, test_articles)
+    return dataset
 
 
 def separate_multi_batch(sample, max_num_paras):

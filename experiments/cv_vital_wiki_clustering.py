@@ -406,8 +406,8 @@ def vital_wiki_clustering_baseline_sbert_triplet_model(vital_wiki_2cv_data_file,
                     opt.step()
                     opt.zero_grad()
                     schd.step()
-                test_rand, test_nmi = do_eval(test_data_current, model, triplet_model=True)
-                print('Epoch %d, mean loss: %.4f, mean RAND %.4f +- %.4f, mean NMI %.4f +- %.4f' % (epoch + 1,
+            test_rand, test_nmi = do_eval(test_data_current, model, triplet_model=True)
+            print('Epoch %d, mean loss: %.4f, mean RAND %.4f +- %.4f, mean NMI %.4f +- %.4f' % (epoch + 1,
                                                                             running_loss / len(train_data_current),
                                                                             np.mean(list(test_rand.values())),
                                                                             np.std(list(test_rand.values()),ddof=1) / np.sqrt(len(test_rand.keys())),
