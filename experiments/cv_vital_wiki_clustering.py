@@ -24,7 +24,7 @@ def put_features_in_device(input_features, device):
             input_features[key] = input_features[key].to(device)
 
 
-def do_eval(test_samples, model, qc=None, triplet_model=False):
+def do_eval(test_samples, model, qc=None, triplet_model=False, no_query=False):
     model.eval()
     rand_dict, nmi_dict = {}, {}
     for s in test_samples:
@@ -36,7 +36,10 @@ def do_eval(test_samples, model, qc=None, triplet_model=False):
         else:
             texts = s.para_texts
             query_content = s.category
-            input_texts = [(query_content, t) for t in texts]
+            if no_query:
+                input_texts = texts
+            else:
+                input_texts = [(query_content, t) for t in texts]
             embeddings = model.qp_model.encode(input_texts, convert_to_tensor=True)
         pred_labels = model.get_clustering(embeddings, k)
         rand = adjusted_rand_score(true_labels, pred_labels)
@@ -63,6 +66,7 @@ def do_eval_dkm_param(test_samples, model, qc=None):
 
 
 def vital_wiki_clustering_single_model(vital_wiki_2cv_data_file,
+                                    no_query_mode,
                                     device,
                                     loss_name,
                                     query_context_ref,
@@ -95,9 +99,9 @@ def vital_wiki_clustering_single_model(vital_wiki_2cv_data_file,
         opt = AdamW(optimizer_grouped_parameters, lr=lrate)
         schd = transformers.get_linear_schedule_with_warmup(opt, warmup, num_epochs * num_train_steps)
         if query_context_ref is not None:
-            test_rand, test_nmi = do_eval(test_data_current, model, qc)
+            test_rand, test_nmi = do_eval(test_data_current, model, qc, no_query=no_query_mode)
         else:
-            test_rand, test_nmi = do_eval(test_data_current, model)
+            test_rand, test_nmi = do_eval(test_data_current, model, no_query=no_query_mode)
         print('\nFold %d Initial Test evaluation' % (i+1))
         print('Mean RAND %.4f +- %.4f, NMI %.4f +- %.4f' % (np.mean(list(test_rand.values())),
                                                             np.std(list(test_rand.values()), ddof=1) / np.sqrt(len(test_rand.keys())),
@@ -115,7 +119,10 @@ def vital_wiki_clustering_single_model(vital_wiki_2cv_data_file,
                 query_content = sample.category +'. ' + sample.q.split('enwiki:')[1].replace('%20', ' ')
                 n = len(sample.paras)
                 k = len(set(sample.para_labels))
-                input_texts = [(query_content, t) for t in sample.para_texts]
+                if no_query_mode:
+                    input_texts = sample.para_texts
+                else:
+                    input_texts = [(query_content, t) for t in sample.para_texts]
                 input_features = model.qp_model.tokenize(input_texts)
                 put_features_in_device(input_features, device)
                 #print(GPUtil.showUtilization())
@@ -129,9 +136,9 @@ def vital_wiki_clustering_single_model(vital_wiki_2cv_data_file,
                 opt.zero_grad()
                 schd.step()
             if query_context_ref is not None:
-                test_rand, test_nmi = do_eval(test_data_current, model, qc)
+                test_rand, test_nmi = do_eval(test_data_current, model, qc, no_query=no_query_mode)
             else:
-                test_rand, test_nmi = do_eval(test_data_current, model)
+                test_rand, test_nmi = do_eval(test_data_current, model, no_query=no_query_mode)
             print('Epoch %d, mean loss: %.4f, mean RAND %.4f +- %.4f, mean NMI %.4f +- %.4f' % (epoch + 1,
                                                                 running_loss / len(train_data_current),
                                                                 np.mean(list(test_rand.values())),
@@ -146,9 +153,9 @@ def vital_wiki_clustering_single_model(vital_wiki_2cv_data_file,
         print('Evaluation Fold %d' % (i+1))
         print('=================')
         if query_context_ref is not None:
-            test_rand, test_nmi = do_eval(test_data_current, model, qc)
+            test_rand, test_nmi = do_eval(test_data_current, model, qc, no_query=no_query_mode)
         else:
-            test_rand, test_nmi = do_eval(test_data_current, model)
+            test_rand, test_nmi = do_eval(test_data_current, model, no_query=no_query_mode)
         print('Mean RAND %.4f +- %.4f, NMI %.4f +- %.4f' % (np.mean(list(test_rand.values())),
                                                             np.std(list(test_rand.values()), ddof=1) / np.sqrt(len(test_rand.keys())),
                                                             np.mean(list(test_nmi.values())),
@@ -469,10 +476,11 @@ def main():
     parser.add_argument('-lr', '--lrate', default=2e-5)
     parser.add_argument('-ep', '--epochs', default=2)
     parser.add_argument('-ed', '--emb_dim', default=256)
+    parser.add_argument('--nq', action='store_true', default=False)
 
     args = parser.parse_args()
     if args.experiment == 1:
-        vital_wiki_clustering_single_model(args.vital_data, device, args.loss, args.query_con, args.max_num_tokens,
+        vital_wiki_clustering_single_model(args.vital_data, args.nq, device, args.loss, args.query_con, args.max_num_tokens,
                                            args.max_grad_norm, args.weight_decay, args.warmup, args.lrate, args.epochs,
                                            args.model_name, args.emb_dim, args.output_path)
     elif args.experiment == 2:
