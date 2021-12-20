@@ -63,16 +63,17 @@ def do_eval(test_data, model, max_num_tokens, qc=None, triplet_model=False):
 
 def arxiv_clustering_single_model(arxiv_5cv_data_file,
                                     device,
-                                    query_context_ref=None,
-                                    loss_name='adj',
-                                    max_num_tokens=128,
-                                    max_grad_norm=1.0,
-                                    weight_decay=0.01,
-                                    warmup=10000,
-                                    lrate=2e-5,
-                                    num_epochs=2,
-                                    emb_model_name='sentence-transformers/all-MiniLM-L6-v2',
-                                    emb_dim=256):
+                                    query_context_ref,
+                                    loss_name,
+                                    max_num_tokens,
+                                    max_grad_norm,
+                                    weight_decay,
+                                    warmup,
+                                    lrate,
+                                    num_epochs,
+                                    emb_model_name,
+                                    emb_dim,
+                                    output_path):
     if query_context_ref is not None:
         with open(query_context_ref, 'r') as f:
             qc = json.load(f)
@@ -104,6 +105,7 @@ def arxiv_clustering_single_model(arxiv_5cv_data_file,
         else:
             loss_func = get_weighted_adj_rand_loss
         for epoch in tqdm(range(num_epochs)):
+            running_loss = 0
             for idx in tqdm(range(len(train_data_current))):
                 model.train()
                 sample = train_data_current[idx]
@@ -120,11 +122,27 @@ def arxiv_clustering_single_model(arxiv_5cv_data_file,
                 mc, ma = model(input_features, k)
                 loss = loss_func(ma, sample.paper_labels, device)
                 loss.backward()
+                running_loss += loss.item()
                 #print(batch.q + ' %d paras, Loss %.4f' % (len(batch.paras), loss.detach().item()))
                 nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                 opt.step()
                 opt.zero_grad()
                 schd.step()
+            if query_context_ref is not None:
+                test_rand, test_nmi = do_eval(test_data_current, model, max_num_tokens, qc)
+            else:
+                test_rand, test_nmi = do_eval(test_data_current, model, max_num_tokens)
+            print('Epoch %d, mean loss: %.4f, mean RAND %.4f +- %.4f, mean NMI %.4f +- %.4f' % (epoch + 1,
+                            running_loss / len(train_data_current),
+                            np.mean(list(test_rand.values())),
+                            np.std(list(test_rand.values()),ddof=1) / np.sqrt(len(test_rand.keys())),
+                            np.mean(list(test_nmi.values())),
+                            np.std(list(test_nmi.values()),ddof=1) / np.sqrt(len(test_nmi.keys()))))
+        if output_path is not None:
+            print('Saving the trained model...')
+            torch.save(model.state_dict(), output_path+'_fold'+str(i+1)+'.model')
+            model = QuerySpecificClusteringModel(emb_model_name, emb_dim, device, max_num_tokens)
+            model.load_state_dict(torch.load(output_path+'_fold'+str(i+1)+'.model'))
         print('Evaluation Fold %d' % (i+1))
         print('=================')
         if query_context_ref is not None:
@@ -137,15 +155,16 @@ def arxiv_clustering_single_model(arxiv_5cv_data_file,
 
 def arxiv_clustering_baseline_sbert_triplet_model(arxiv_5cv_data_file,
                                     device,
-                                    max_num_tokens=128,
-                                    max_grad_norm=1.0,
-                                    weight_decay=0.01,
-                                    warmup=10000,
-                                    lrate=2e-5,
-                                    num_epochs=2,
-                                    emb_model_name='sentence-transformers/all-MiniLM-L6-v2',
+                                    max_num_tokens,
+                                    max_grad_norm,
+                                    weight_decay,
+                                    warmup,
+                                    lrate,
+                                    num_epochs,
+                                    emb_model_name,
+                                    emb_dim,
+                                    output_path,
                                     triplet_margin=5,
-                                    emb_dim=256,
                                     batch_size=32):
     cv_datasets = np.load(arxiv_5cv_data_file, allow_pickle=True)[()]['data']
     for i in range(len(cv_datasets)):
@@ -168,6 +187,8 @@ def arxiv_clustering_baseline_sbert_triplet_model(arxiv_5cv_data_file,
         for s in test_data_current.keys():
             print(s + ' RAND %.4f, NMI %.4f' % (test_rand[s], test_nmi[s]))
         for epoch in tqdm(range(num_epochs)):
+            running_loss = 0
+            n = 0
             for idx in tqdm(range(len(train_data_current))):
                 model.train()
                 sample = train_data_current[idx]
@@ -183,11 +204,25 @@ def arxiv_clustering_baseline_sbert_triplet_model(arxiv_5cv_data_file,
                     #print(GPUtil.showUtilization())
                     loss = model(anchor_features, pos_features, neg_features)
                     loss.backward()
+                    running_loss += loss.item()
+                    n += 1
                     #print(batch.q + ' %d paras, Loss %.4f' % (len(batch.paras), loss.detach().item()))
                     nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                     opt.step()
                     opt.zero_grad()
                     schd.step()
+            test_rand, test_nmi = do_eval(test_data_current, model, max_num_tokens)
+            print('Epoch %d, mean loss: %.4f, mean RAND %.4f +- %.4f, mean NMI %.4f +- %.4f' % (epoch + 1,
+                            running_loss / n,
+                            np.mean(list(test_rand.values())),
+                            np.std(list(test_rand.values()),ddof=1) / np.sqrt(len(test_rand.keys())),
+                            np.mean(list(test_nmi.values())),
+                            np.std(list(test_nmi.values()),ddof=1) / np.sqrt(len(test_nmi.keys()))))
+        if output_path is not None:
+            print('Saving the trained model...')
+            torch.save(model.state_dict(), output_path+'_fold'+str(i+1)+'.model')
+            model = SBERTTripletLossModel(emb_model_name, device, max_num_tokens, triplet_margin)
+            model.load_state_dict(torch.load(output_path+'_fold'+str(i+1)+'.model'))
         print('Evaluation Fold %d' % (i + 1))
         print('=================')
         test_rand, test_nmi = do_eval(test_data_current, model, max_num_tokens, triplet_model=True)
@@ -213,19 +248,36 @@ def get_triplet_texts_from_sample(sample):
     return input_texts
 
 
+def main():
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+        print('CUDA is available and using device: '+str(device))
+    else:
+        device = torch.device('cpu')
+        print('CUDA not available, using device: '+str(device))
+    parser = argparse.ArgumentParser(description='Run query specific clustering experiments on Arxiv dataset')
+    parser.add_argument('-ad', '--arxiv_data', help='Path to arxiv clustering npy file prepared for 5-fold cv', default='D:\\arxiv_dataset\\arxiv_clustering_data_5cv.npy')
+    parser.add_argument('-op', '--output_path', help='Path to save the trained model', default=None)
+    parser.add_argument('-ne', '--experiment', type=int, help='Choose the experiment to run (1: QSC/ 2: baseline)', default=1)
+    parser.add_argument('-ls', '--loss', help='Loss func to use for QSC', default='adj')
+    parser.add_argument('-qc', '--query_con', help='Path to query-context json file', default=None)
+    parser.add_argument('-mn', '--model_name', help='SBERT embedding model name', default='sentence-transformers/all-MiniLM-L6-v2')
+    parser.add_argument('-nt', '--max_num_tokens', type=int, help='Max no. of tokens', default=128)
+    parser.add_argument('-gn', '--max_grad_norm', type=float, help='Max gradient norm', default=1.0)
+    parser.add_argument('-wd', '--weight_decay', type=float, default=0.01)
+    parser.add_argument('-wu', '--warmup', type=int, default=1000)
+    parser.add_argument('-lr', '--lrate', type=float, default=2e-5)
+    parser.add_argument('-ep', '--epochs', type=int, default=2)
+    parser.add_argument('-ed', '--emb_dim', type=int, default=256)
 
-if torch.cuda.is_available():
-    device = torch.device('cuda')
-    print('CUDA is available and using device: '+str(device))
-else:
-    device = torch.device('cpu')
-    print('CUDA not available, using device: '+str(device))
-parser = argparse.ArgumentParser(description='Run query specific clustering experiments on Arxiv dataset')
-parser.add_argument('-ad', '--arxiv_data', help='Path to arxiv clustering npy file prepared for 5-fold cv', default='D:\\arxiv_dataset\\arxiv_clustering_data_5cv.npy')
-parser.add_argument('-ne', '--experiment', type=int, help='Choose the experiment to run (1: QSC/ 2: baseline)', default=1)
+    args = parser.parse_args()
+    if args.experiment == 1:
+        arxiv_clustering_single_model(args.arxiv_data, device, args.query_con, args.loss, args.max_num_tokens, args.max_grad_norm,
+                                      args.weight_decay, args.warmup, args.lrate, args.epochs, args.model_name, args.emb_dim, args.output_path)
+    elif args.experiment == 2:
+        arxiv_clustering_baseline_sbert_triplet_model(args.arxiv_data, device, args.max_num_tokens, args.max_grad_norm,
+                                      args.weight_decay, args.warmup, args.lrate, args.epochs, args.model_name, args.emb_dim, args.output_path)
 
-args = parser.parse_args()
-if args.experiment == 1:
-    arxiv_clustering_single_model(args.arxiv_data, device)
-elif args.experiment == 2:
-    arxiv_clustering_baseline_sbert_triplet_model(args.arxiv_data, device)
+
+if __name__ == '__main__':
+    main()
