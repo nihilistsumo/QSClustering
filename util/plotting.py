@@ -13,6 +13,13 @@ import core.clustering
 from util.data import get_rev_qrels, get_article_qrels
 from experiments.arxiv_abstract_clustering import default_subject_desc
 
+if torch.cuda.is_available():
+    device = torch.device('cuda')
+    print('CUDA is available and using device: ' + str(device))
+else:
+    device = torch.device('cpu')
+    print('CUDA not available, using device: ' + str(device))
+
 
 def add_linebreak_str(s, w=50):
     res = []
@@ -35,12 +42,6 @@ def plot_3d_vecs(vecs, title, names=None, labels=None):
 def compare_treccar_models_cv(qsc_model_path, triplet_model_path, dataset_path, test_fold, query=None,
                               emb_model_name='sentence-transformers/all-MiniLM-L6-v2', emb_dim=256, max_num_tokens=128,
                               triplet_margin=5):
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-        print('CUDA is available and using device: '+str(device))
-    else:
-        device = torch.device('cpu')
-        print('CUDA not available, using device: '+str(device))
     dataset = np.load(dataset_path, allow_pickle=True)[()]['data']
     samples = [s for s in dataset[test_fold]]
     if query is None:
@@ -71,12 +72,6 @@ def compare_treccar_models_cv(qsc_model_path, triplet_model_path, dataset_path, 
 def compare_treccar_models_unseen_queries(qsc_model_path, triplet_model_path, art_qrels, top_qrels, paratext_tsv,
                                           query=None, emb_model_name='sentence-transformers/all-MiniLM-L6-v2',
                                           emb_dim=256, max_num_tokens=128, triplet_margin=5):
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-        print('CUDA is available and using device: '+str(device))
-    else:
-        device = torch.device('cpu')
-        print('CUDA not available, using device: '+str(device))
     page_paras = get_article_qrels(art_qrels)
     rev_para_labels = get_rev_qrels(top_qrels)
     queries = list(page_paras.keys())
@@ -109,12 +104,6 @@ def compare_treccar_models_unseen_queries(qsc_model_path, triplet_model_path, ar
 
 def query_effect_vital_wiki(vital_wiki_2cv_data, model_path, model_train_fold, num_run=1,
                             emb_model_name='sentence-transformers/all-MiniLM-L6-v2', emb_dim=256, max_num_tokens=128):
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-        print('CUDA is available and using device: '+str(device))
-    else:
-        device = torch.device('cpu')
-        print('CUDA not available, using device: '+str(device))
     model = core.clustering.QuerySpecificClusteringModel(emb_model_name, emb_dim, device, max_num_tokens)
     model.load_state_dict(torch.load(model_path))
     model.eval()
@@ -149,14 +138,28 @@ def query_effect_vital_wiki(vital_wiki_2cv_data, model_path, model_train_fold, n
     fig.show()
 
 
+def vital_wiki_viz(vital_wiki_2cv_data, model_path, model_train_fold,
+                            emb_model_name='sentence-transformers/all-MiniLM-L6-v2', emb_dim=256, max_num_tokens=128):
+    model = core.clustering.QuerySpecificClusteringModel(emb_model_name, emb_dim, device, max_num_tokens)
+    model.load_state_dict(torch.load(model_path))
+    model.eval()
+    dataset = np.load(vital_wiki_2cv_data, allow_pickle=True)[()]['data']
+    test_samples = dataset[model_train_fold].test_samples
+    random.shuffle(test_samples)
+    texts = []
+    names = []
+    labels = []
+    for s in test_samples:
+        input_texts = [(s.category, t) for t in s.para_texts]
+        texts += input_texts
+        names += s.para_labels
+        labels += [s.q] * len(s.para_labels)
+    embeddings = model.qp_model.encode(texts[:5000])
+    plot_3d_vecs(embeddings, 'Vital wiki paras', names[:5000], labels[:5000])
+
+
 def query_effect_arxiv(arxiv_5cv_data, model_path, model_train_fold, subject_desc,
                             emb_model_name='sentence-transformers/all-MiniLM-L6-v2', emb_dim=256, max_num_tokens=128):
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-        print('CUDA is available and using device: '+str(device))
-    else:
-        device = torch.device('cpu')
-        print('CUDA not available, using device: '+str(device))
     model = core.clustering.QuerySpecificClusteringModel(emb_model_name, emb_dim, device, max_num_tokens)
     model.load_state_dict(torch.load(model_path))
     model.eval()
@@ -180,6 +183,35 @@ def query_effect_arxiv(arxiv_5cv_data, model_path, model_train_fold, subject_des
     fig.show()
 
 
+def query_effect_arxiv_online(arxiv_5cv_data, model_path, model_train_fold, subject_desc,
+                            emb_model_name='sentence-transformers/all-MiniLM-L6-v2', emb_dim=256, max_num_tokens=128):
+    model = core.clustering.QuerySpecificClusteringModel(emb_model_name, emb_dim, device, max_num_tokens)
+    model.load_state_dict(torch.load(model_path))
+    model.eval()
+    dataset = np.load(arxiv_5cv_data, allow_pickle=True)[()]['data']
+    test_data = dataset[model_train_fold].test_arxiv_data
+    subjects = list(test_data.keys())
+    while True:
+        for i in range(len(subjects)):
+            print('%d: ' % (i + 1) + subjects[i])
+        print('%d: quit' % 0)
+        i = int(input('Pick a subject to use as query')) - 1
+        if i == -1:
+            break
+        j = int(input('Pick a subject to cluster from test data using that query')) - 1
+        if j == -1:
+            break
+        query_content = subject_desc[subjects[i]]
+        texts = [d['abstract'] for d in test_data[subjects[j]]]
+        true_labels = [d['label'] for d in test_data[subjects[j]]]
+        k = len(set(true_labels))
+        input_texts = [(query_content, t) for t in texts]
+        embeddings = model.qp_model.encode(input_texts, convert_to_tensor=True)
+        rand = adjusted_rand_score(true_labels, model.get_clustering(embeddings, k))
+        names = [add_linebreak_str(t) for t in texts]
+        plot_3d_vecs(embeddings.detach().cpu().numpy(), 'Adj. RAND: %.4f' % rand, names, true_labels)
+
+
 '''
 compare_treccar_models_cv('D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\test_results\\qsc_adj_trec_2cv_minilm_ep75_fold1.model',
                           'D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\test_results\\triplet_trec_2cv_minilm_ep75_fold1.model',
@@ -196,6 +228,9 @@ compare_treccar_models_unseen_queries('D:\\new_cats_data\\QSC_data\\benchmarkY1-
 
 query_effect_vital_wiki('D:\\new_cats_data\\QSC_data\\vital_wiki\\vital_wiki_clustering_data_2cv.npy',
                         'D:\\new_cats_data\\QSC_data\\vital_wiki\\test_results\\qsc_adj_vital_wiki_fold1.model', 0, 40)
-'''
-query_effect_arxiv('D:\\arxiv_dataset\\arxiv_clustering_data_5cv.npy',
+
+query_effect_arxiv_online('D:\\arxiv_dataset\\arxiv_clustering_data_5cv.npy',
                    'D:\\arxiv_dataset\\test_results\\arxiv_qsc_adj_ep5_fold1.model', 0, default_subject_desc)
+'''
+vital_wiki_viz('D:\\new_cats_data\\QSC_data\\vital_wiki\\vital_wiki_clustering_data_2cv.npy',
+               'D:\\new_cats_data\\QSC_data\\vital_wiki\\test_results\\qsc_adj_vital_wiki_fold1.model', 0)
