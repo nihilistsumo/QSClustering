@@ -24,7 +24,7 @@ def put_features_in_device(input_features, device):
             input_features[key] = input_features[key].to(device)
 
 
-def do_eval(test_samples, model, qc=None, triplet_model=False):
+def do_eval(test_samples, model, qc=None, triplet_model=False, no_query=False):
     model.eval()
     rand_dict, nmi_dict = {}, {}
     for s in test_samples:
@@ -36,7 +36,10 @@ def do_eval(test_samples, model, qc=None, triplet_model=False):
         else:
             texts = s.para_texts
             query_content = s.q.split('enwiki:')[1].replace('%20', ' ')
-            input_texts = [(query_content, t) for t in texts]
+            if no_query:
+                input_texts = texts
+            else:
+                input_texts = [(query_content, t) for t in texts]
             embeddings = model.qp_model.encode(input_texts, convert_to_tensor=True)
         pred_labels = model.get_clustering(embeddings, k)
         rand = adjusted_rand_score(true_labels, pred_labels)
@@ -140,6 +143,7 @@ def treccar_clustering_single_model(treccar_2cv_data_file,
 
 
 def treccar_clustering_single_model_full_train(treccar_full_data_file,
+                                    no_query_mode,
                                     device,
                                     loss_name,
                                     query_context_ref,
@@ -174,8 +178,8 @@ def treccar_clustering_single_model_full_train(treccar_full_data_file,
         val_rand, val_nmi = do_eval(val_samples, model, qc)
         test_rand, test_nmi = do_eval(test_samples, model, qc)
     else:
-        val_rand, val_nmi = do_eval(val_samples, model)
-        test_rand, test_nmi = do_eval(test_samples, model)
+        val_rand, val_nmi = do_eval(val_samples, model, no_query=no_query_mode)
+        test_rand, test_nmi = do_eval(test_samples, model, no_query=no_query_mode)
     print('\nInitial evaluation')
     print('Mean Val RAND %.4f +- %.4f, Val NMI %.4f +- %.4f Test RAND %.4f +- %.4f, Test NMI %.4f +- %.4f' % (
         np.mean(list(val_rand.values())),
@@ -198,7 +202,10 @@ def treccar_clustering_single_model_full_train(treccar_full_data_file,
             query_content = sample.q.split('enwiki:')[1].replace('%20', ' ')
             n = len(sample.paras)
             k = len(set(sample.para_labels))
-            input_texts = [(query_content, t) for t in sample.para_texts]
+            if no_query_mode:
+                input_texts = sample.para_texts
+            else:
+                input_texts = [(query_content, t) for t in sample.para_texts]
             input_features = model.qp_model.tokenize(input_texts)
             put_features_in_device(input_features, device)
             # print(GPUtil.showUtilization())
@@ -215,8 +222,8 @@ def treccar_clustering_single_model_full_train(treccar_full_data_file,
                     val_rand, val_nmi = do_eval(val_samples, model, qc)
                     test_rand, test_nmi = do_eval(test_samples, model, qc)
                 else:
-                    val_rand, val_nmi = do_eval(val_samples, model)
-                    test_rand, test_nmi = do_eval(test_samples, model)
+                    val_rand, val_nmi = do_eval(val_samples, model, no_query=no_query_mode)
+                    test_rand, test_nmi = do_eval(test_samples, model, no_query=no_query_mode)
                 print(
                     'Mean Val RAND %.4f +- %.4f, Val NMI %.4f +- %.4f Test RAND %.4f +- %.4f, Test NMI %.4f +- %.4f' % (
                         np.mean(list(val_rand.values())),
@@ -237,8 +244,8 @@ def treccar_clustering_single_model_full_train(treccar_full_data_file,
         val_rand, val_nmi = do_eval(val_samples, model, qc)
         test_rand, test_nmi = do_eval(test_samples, model, qc)
     else:
-        val_rand, val_nmi = do_eval(val_samples, model)
-        test_rand, test_nmi = do_eval(test_samples, model)
+        val_rand, val_nmi = do_eval(val_samples, model, no_query=no_query_mode)
+        test_rand, test_nmi = do_eval(test_samples, model, no_query=no_query_mode)
     print('Final Evaluation')
     print('================')
     print('Mean Val RAND %.4f +- %.4f, Val NMI %.4f +- %.4f Test RAND %.4f +- %.4f, Test NMI %.4f +- %.4f' % (
@@ -576,6 +583,7 @@ def main():
     parser.add_argument('-lr', '--lrate', type=float, default=2e-5)
     parser.add_argument('-ep', '--epochs', type=int, default=75)
     parser.add_argument('-ed', '--emb_dim', type=int, default=256)
+    parser.add_argument('--nq', action='store_true', default=False)
 
     args = parser.parse_args()
     if args.experiment == 1:
@@ -583,7 +591,7 @@ def main():
                                         args.max_grad_norm, args.weight_decay, args.warmup, args.lrate, args.epochs,
                                         args.model_name, args.emb_dim, args.output_path)
     elif args.experiment == 2:
-        treccar_clustering_single_model_full_train(args.treccar_data, device, args.loss, args.query_con, args.max_num_tokens,
+        treccar_clustering_single_model_full_train(args.treccar_data, args.nq, device, args.loss, args.query_con, args.max_num_tokens,
                                         args.max_grad_norm, args.weight_decay, args.warmup, args.lrate, args.epochs,
                                         args.model_name, args.emb_dim, args.output_path)
     elif args.experiment == 3:

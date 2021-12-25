@@ -205,10 +205,9 @@ class QuerySpecificClusteringModel(nn.Module):
 
 
 class QuerySpecificAttentionClusteringModel(nn.Module):
-    def __init__(self, trans_model_name, attn_emb_dim, num_attn_head, device, max_len, max_num_psg, kmeans_plus=False):
+    def __init__(self, trans_model_name, attn_emb_dim, num_attn_head, device, max_len, kmeans_plus=False):
         super(QuerySpecificAttentionClusteringModel, self).__init__()
         self.device = device
-        self.max_num_psg = max_num_psg
         emb_model = models.Transformer(trans_model_name, max_seq_length=max_len)
         self.emb_dim = emb_model.get_word_embedding_dimension()
         pool_model = models.Pooling(self.emb_dim)
@@ -221,13 +220,13 @@ class QuerySpecificAttentionClusteringModel(nn.Module):
                                            requires_grad=True))
         self.vw = nn.Parameter(torch.randn(self.emb_dim, self.attn_emb_dim, device=device, dtype=torch.float32,
                                            requires_grad=True))
-        self.self_attn = torch.nn.MultiheadAttention(self.attn_emb_dim, self.num_attn_head, batch_first=True)
+        self.self_attn = torch.nn.MultiheadAttention(self.attn_emb_dim, self.num_attn_head, batch_first=True).to(device)
         self.dkm = DKM()
         self.use_kmeans_plus = kmeans_plus
 
     def forward(self, input_features, k_cl):
-        assert input_features.shape[0] == self.max_num_psg
         self.qp = self.qp_model(input_features)['sentence_embedding']
+        #self.qp = self.qp_model.encode(input_texts, convert_to_tensor=True)
         self.q = torch.unsqueeze(torch.matmul(self.qp, self.qw), 0)
         self.k = torch.unsqueeze(torch.matmul(self.qp, self.kw), 0)
         self.v = torch.unsqueeze(torch.matmul(self.qp, self.vw), 0)
@@ -244,6 +243,7 @@ class QuerySpecificAttentionClusteringModel(nn.Module):
 
     def get_embedding(self, input_features):
         self.qp = self.qp_model(input_features)['sentence_embedding']
+        #self.qp = self.qp_model.encode(input_texts, convert_to_tensor=True)
         self.q = torch.unsqueeze(torch.matmul(self.qp, self.qw), 0)
         self.k = torch.unsqueeze(torch.matmul(self.qp, self.kw), 0)
         self.v = torch.unsqueeze(torch.matmul(self.qp, self.vw), 0)
@@ -276,6 +276,73 @@ class QuerySpecificAttentionClusteringModel(nn.Module):
         return pred_labels
 
 
+class QuerySpecificAttentionFixedEmbedClusteringModel(nn.Module):
+    def __init__(self, emb_dim, attn_emb_dim, num_attn_head, device, kmeans_plus=False, debug_mode=False):
+        super(QuerySpecificAttentionFixedEmbedClusteringModel, self).__init__()
+        self.device = device
+        self.emb_dim = emb_dim
+        self.attn_emb_dim = attn_emb_dim
+        self.num_attn_head = num_attn_head
+        self.qw = nn.Parameter(torch.randn(self.emb_dim, self.attn_emb_dim, device=device, dtype=torch.float32,
+                                           requires_grad=True))
+        self.kw = nn.Parameter(torch.randn(self.emb_dim, self.attn_emb_dim, device=device, dtype=torch.float32,
+                                           requires_grad=True))
+        self.vw = nn.Parameter(torch.randn(self.emb_dim, self.attn_emb_dim, device=device, dtype=torch.float32,
+                                           requires_grad=True))
+        self.self_attn = torch.nn.MultiheadAttention(self.attn_emb_dim, self.num_attn_head, batch_first=True).to(device)
+        self.dkm = DKM()
+        self.use_kmeans_plus = kmeans_plus
+        self.debug = debug_mode
+
+    def forward(self, input_embeddings, k_cl):
+        self.q = torch.unsqueeze(torch.matmul(input_embeddings, self.qw), 0)
+        self.k = torch.unsqueeze(torch.matmul(input_embeddings, self.kw), 0)
+        self.v = torch.unsqueeze(torch.matmul(input_embeddings, self.vw), 0)
+        self.qp_tr, self.attn_wt = self.self_attn(self.q, self.k, self.v)
+        if self.debug:
+            attn_wt_np = self.attn_wt.detach().clone().cpu().numpy()
+        self.qp_tr = torch.squeeze(self.qp_tr, 0)
+        if self.use_kmeans_plus:
+            qp_tr = self.qp_tr.detach().clone().cpu().numpy()
+            init_c, _ = kmeans_plusplus(qp_tr, k_cl)
+            init_c = torch.tensor(init_c, dtype=torch.float32, device=self.device)
+        else:
+            init_c = self.qp_tr[random.sample(range(self.qp_tr.shape[0]), k_cl)].detach().clone()
+        self.C, self.a = self.dkm(self.qp_tr, init_c)
+        return self.C, self.a
+
+    def get_transformed_embedding(self, input_embeddings):
+        self.q = torch.unsqueeze(torch.matmul(input_embeddings, self.qw), 0)
+        self.k = torch.unsqueeze(torch.matmul(input_embeddings, self.kw), 0)
+        self.v = torch.unsqueeze(torch.matmul(input_embeddings, self.vw), 0)
+        self.qp_tr, self.attn_wt = self.self_attn(self.q, self.k, self.v)
+        self.qp_tr = torch.squeeze(self.qp_tr, 0)
+        return self.qp_tr
+
+    def get_clustering(self, embeddings, k_cl, debug_switch=False):
+        q = torch.unsqueeze(torch.matmul(embeddings, self.qw), 0)
+        k = torch.unsqueeze(torch.matmul(embeddings, self.kw), 0)
+        v = torch.unsqueeze(torch.matmul(embeddings, self.vw), 0)
+        embeddings_tr, attn_wt = self.self_attn(q, k, v)
+        embeddings_tr = torch.squeeze(embeddings_tr, 0)
+        if self.use_kmeans_plus:
+            embeddings_tr = embeddings_tr.detach().clone().cpu().numpy()
+            init_c, _ = kmeans_plusplus(embeddings_tr, k_cl)
+            init_c = torch.tensor(init_c, dtype=torch.float32, device=self.device)
+        else:
+            init_c = embeddings_tr[random.sample(range(embeddings_tr.shape[0]), k_cl)].detach().clone()
+        self.C, self.a = self.dkm(embeddings_tr, init_c)
+        if debug_switch:
+            c_np = self.C.clone().cpu().numpy()
+            a_np = self.a.clone().cpu().numpy()
+            init_c_np = init_c.clone().cpu().numpy()
+            embeddings_np = embeddings_tr.clone().cpu().numpy()
+            if torch.std(self.a).item() < 0.01:
+                print('Low std in attention matrix')
+        pred_labels = torch.argmax(self.a, dim=1).detach().cpu().numpy()
+        return pred_labels
+
+
 class QuerySpecificClusteringModelWithSection(nn.Module):
     def __init__(self, trans_model_name, emb_dim, device, max_len):
         super(QuerySpecificClusteringModelWithSection, self).__init__()
@@ -283,11 +350,12 @@ class QuerySpecificClusteringModelWithSection(nn.Module):
         pool_model = models.Pooling(emb_model.get_word_embedding_dimension())
         dense_model = models.Dense(in_features=pool_model.get_sentence_embedding_dimension(), out_features=emb_dim, activation_function=nn.Tanh())
         self.qp_model = SentenceTransformer(modules=[emb_model, pool_model]).to(device)
+        self.sec_model = SentenceTransformer(modules=[emb_model, pool_model]).to(device)
         self.dkm = DKM()
 
-    def forward(self, input_features, section_features, k):
+    def forward(self, input_features, section_texts, k):
         self.qp = self.qp_model(input_features)['sentence_embedding']
-        self.qs = self.qp_model(section_features)['sentence_embedding']
+        self.qs = self.sec_model.encode(section_texts, convert_to_tensor=True)
         init_c = self.qp[random.sample(range(self.qp.shape[0]), k)].detach().clone()
         self.C, self.a = self.dkm(self.qp, init_c)
         return self.C, self.a, self.qp, self.qs

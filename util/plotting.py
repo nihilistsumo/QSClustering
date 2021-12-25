@@ -69,9 +69,9 @@ def compare_treccar_models_cv(qsc_model_path, triplet_model_path, dataset_path, 
     plot_3d_vecs(triplet_vecs.detach().cpu().numpy(), 'Triplet Adj RAND: %.4f' % triplet_rand, names, labels)
 
 
-def compare_treccar_models_unseen_queries(qsc_model_path, triplet_model_path, art_qrels, top_qrels, paratext_tsv,
+def compare_treccar_models_unseen_queries_no_query_mode(qsc_model_path, art_qrels, top_qrels, paratext_tsv,
                                           query=None, emb_model_name='sentence-transformers/all-MiniLM-L6-v2',
-                                          emb_dim=256, max_num_tokens=128, triplet_margin=5):
+                                          triplet_model_path=None, emb_dim=256, max_num_tokens=128, triplet_margin=5):
     page_paras = get_article_qrels(art_qrels)
     rev_para_labels = get_rev_qrels(top_qrels)
     queries = list(page_paras.keys())
@@ -88,18 +88,19 @@ def compare_treccar_models_unseen_queries(qsc_model_path, triplet_model_path, ar
     texts = [paratext[p] for p in paras]
     qsc_model = core.clustering.QuerySpecificClusteringModel(emb_model_name, emb_dim, device, max_num_tokens)
     qsc_model.load_state_dict(torch.load(qsc_model_path))
-    triplet_model = core.clustering.SBERTTripletLossModel(emb_model_name, device, max_num_tokens, triplet_margin)
-    triplet_model.load_state_dict(torch.load(triplet_model_path))
     names = [add_linebreak_str(t) for t in texts]
     k = len(set(labels))
     qsc_vecs = qsc_model.qp_model.encode(texts, convert_to_tensor=True)
     qsc_pred_labels = qsc_model.get_clustering(qsc_vecs, k)
     qsc_rand = adjusted_rand_score(labels, qsc_pred_labels)
-    triplet_vecs = triplet_model.emb_model.encode(texts, convert_to_tensor=True)
-    triplet_pred_labels = triplet_model.get_clustering(triplet_vecs, k)
-    triplet_rand = adjusted_rand_score(labels, triplet_pred_labels)
     plot_3d_vecs(qsc_vecs.detach().cpu().numpy(), 'QSC Adj RAND: %.4f' % qsc_rand, names, labels)
-    plot_3d_vecs(triplet_vecs.detach().cpu().numpy(), 'Triplet Adj RAND: %.4f' % triplet_rand, names, labels)
+    if triplet_model_path is not None:
+        triplet_model = core.clustering.SBERTTripletLossModel(emb_model_name, device, max_num_tokens, triplet_margin)
+        triplet_model.load_state_dict(torch.load(triplet_model_path))
+        triplet_vecs = triplet_model.emb_model.encode(texts, convert_to_tensor=True)
+        triplet_pred_labels = triplet_model.get_clustering(triplet_vecs, k)
+        triplet_rand = adjusted_rand_score(labels, triplet_pred_labels)
+        plot_3d_vecs(triplet_vecs.detach().cpu().numpy(), 'Triplet Adj RAND: %.4f' % triplet_rand, names, labels)
 
 
 def query_effect_vital_wiki(vital_wiki_2cv_data, model_path, model_train_fold, num_run=1,
@@ -212,25 +213,37 @@ def query_effect_arxiv_online(arxiv_5cv_data, model_path, model_train_fold, subj
         plot_3d_vecs(embeddings.detach().cpu().numpy(), 'Adj. RAND: %.4f' % rand, names, true_labels)
 
 
-'''
-compare_treccar_models_cv('D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\test_results\\qsc_adj_trec_2cv_minilm_ep75_fold1.model',
-                          'D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\test_results\\triplet_trec_2cv_minilm_ep75_fold1.model',
-                          'D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\treccar_clustering_data_by1train_2cv.npy',
-                          1,
-                          'enwiki:Allergy')
+def main():
+    '''
+    compare_treccar_models_cv('D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\test_results\\qsc_adj_trec_2cv_minilm_ep75_fold1.model',
+                              'D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\test_results\\triplet_trec_2cv_minilm_ep75_fold1.model',
+                              'D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\treccar_clustering_data_by1train_2cv.npy',
+                              1,
+                              'enwiki:Allergy')
 
-compare_treccar_models_unseen_queries('D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\test_results\\qsc_adj_trec_2cv_minilm_ep75_fold1.model',
-                                      'D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\test_results\\triplet_trec_2cv_minilm_ep75_fold1.model',
-                                      'D:\\new_cats_data\\QSC_data\\benchmarkY1-test-nodup\\test.pages.cbor-article.qrels',
-                                      'D:\\new_cats_data\\QSC_data\\benchmarkY1-test-nodup\\test.pages.cbor-toplevel.qrels',
-                                      'D:\\new_cats_data\\QSC_data\\benchmarkY1-test-nodup\\by1test_paratext\\by1test_paratext.tsv',
-                                      50)
+    compare_treccar_models_unseen_queries('D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\test_results\\qsc_adj_trec_2cv_minilm_ep75_fold1.model',
+                                          'D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\test_results\\triplet_trec_2cv_minilm_ep75_fold1.model',
+                                          'D:\\new_cats_data\\QSC_data\\benchmarkY1-test-nodup\\test.pages.cbor-article.qrels',
+                                          'D:\\new_cats_data\\QSC_data\\benchmarkY1-test-nodup\\test.pages.cbor-toplevel.qrels',
+                                          'D:\\new_cats_data\\QSC_data\\benchmarkY1-test-nodup\\by1test_paratext\\by1test_paratext.tsv',
+                                          50)
 
-query_effect_vital_wiki('D:\\new_cats_data\\QSC_data\\vital_wiki\\vital_wiki_clustering_data_2cv.npy',
-                        'D:\\new_cats_data\\QSC_data\\vital_wiki\\test_results\\qsc_adj_vital_wiki_fold1.model', 0, 40)
+    query_effect_vital_wiki('D:\\new_cats_data\\QSC_data\\vital_wiki\\vital_wiki_clustering_data_2cv.npy',
+                            'D:\\new_cats_data\\QSC_data\\vital_wiki\\test_results\\qsc_adj_vital_wiki_fold1.model', 0, 40)
 
-query_effect_arxiv_online('D:\\arxiv_dataset\\arxiv_clustering_data_5cv.npy',
-                   'D:\\arxiv_dataset\\test_results\\arxiv_qsc_adj_ep5_fold1.model', 0, default_subject_desc)
-'''
-vital_wiki_viz('D:\\new_cats_data\\QSC_data\\vital_wiki\\vital_wiki_clustering_data_2cv.npy',
-               'D:\\new_cats_data\\QSC_data\\vital_wiki\\test_results\\qsc_adj_vital_wiki_fold1.model', 0)
+    query_effect_arxiv_online('D:\\arxiv_dataset\\arxiv_clustering_data_5cv.npy',
+                       'D:\\arxiv_dataset\\test_results\\arxiv_qsc_adj_ep5_fold1.model', 0, default_subject_desc)
+
+    vital_wiki_viz('D:\\new_cats_data\\QSC_data\\vital_wiki\\vital_wiki_clustering_data_2cv.npy',
+                   'D:\\new_cats_data\\QSC_data\\vital_wiki\\test_results\\qsc_adj_vital_wiki_fold1.model', 0)
+    '''
+    compare_treccar_models_unseen_queries_no_query_mode(
+        'D:\\new_cats_data\\QSC_data\\train\\test_results\\full_train_treccar_ep2_qsc_adj_nq.model.model',
+        'D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\train.pages.cbor-article.qrels',
+        'D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\train.pages.cbor-toplevel.qrels',
+        'D:\\new_cats_data\\QSC_data\\benchmarkY1-train-nodup\\by1train_paratext\\by1train_paratext.tsv',
+        query='enwiki:Agriprocessors')
+
+
+if __name__ == '__main__':
+    main()

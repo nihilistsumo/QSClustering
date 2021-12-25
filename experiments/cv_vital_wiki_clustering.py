@@ -179,7 +179,7 @@ def vital_wiki_clustering_single_model_with_sections(vital_wiki_2cv_data_file,
         with open(query_context_ref, 'r') as f:
             qc = json.load(f)
     cv_datasets = np.load(vital_wiki_2cv_data_file, allow_pickle=True)[()]['data']
-    alpha = 0.005
+    alpha = 0.01
     beta = 0.005
     for i in range(len(cv_datasets)):
         train_data_current = cv_datasets[i]
@@ -225,16 +225,17 @@ def vital_wiki_clustering_single_model_with_sections(vital_wiki_2cv_data_file,
                     if '/' in s:
                         section_texts.append((query_content, s.split('/')[1].replace('%20', ' ')))
                     else:
-                        section_texts.append((query_content, query_content))
-                section_features = model.qp_model.tokenize(section_texts)
-                put_features_in_device(section_features, device)
+                        section_texts.append((query_content, s.split('enwiki:')[1].replace('%20', ' ')))
+                #section_features = model.qp_model.tokenize(section_texts)
+                #put_features_in_device(section_features, device)
                 #print(GPUtil.showUtilization())
-                mc, ma, qp_emb, qs_emb = model(input_features, section_features, k)
+                mc, ma, qp_emb, qs_emb = model(input_features, section_texts, k)
                 clustering_loss = cl_loss_func(ma, sample.para_labels, device)
                 classification_loss = torch.sum((qp_emb - qs_emb).pow(2).sum(1).sqrt())
-                section_emb_reg = torch.sum(torch.cdist(qs_emb, qs_emb, p=2.0)) / k ** 2
-                loss = clustering_loss + alpha * classification_loss - beta * section_emb_reg
+                #section_emb_reg = torch.sum(torch.cdist(qs_emb, qs_emb, p=2.0)) / k ** 2
+                loss = clustering_loss + alpha * classification_loss
                 loss.backward()
+                running_loss += loss.item()
                 #print(batch.q + ' %d paras, Loss %.4f' % (len(batch.paras), loss.detach().item()))
                 nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                 opt.step()
@@ -253,7 +254,7 @@ def vital_wiki_clustering_single_model_with_sections(vital_wiki_2cv_data_file,
         if output_path is not None:
             print('Saving the trained model...')
             torch.save(model.state_dict(), output_path+'_fold'+str(i+1)+'.model')
-            model = QuerySpecificClusteringModel(emb_model_name, emb_dim, device, max_num_tokens)
+            model = QuerySpecificClusteringModelWithSection(emb_model_name, emb_dim, device, max_num_tokens)
             model.load_state_dict(torch.load(output_path+'_fold'+str(i+1)+'.model'))
         print('Evaluation Fold %d' % (i+1))
         print('=================')
