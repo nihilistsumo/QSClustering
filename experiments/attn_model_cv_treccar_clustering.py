@@ -99,7 +99,8 @@ def treccar_clustering_fixed_emb_attn_model_existing_emb(treccar_full_data_file,
                                     kmeans_plus,
                                     output_path):
     treccar_dataset = np.load(treccar_full_data_file, allow_pickle=True)[()]['data']
-    train_samples = treccar_dataset.val_samples
+    #train_samples = treccar_dataset.val_samples
+    train_samples = [treccar_dataset[i] for i in range(len(treccar_dataset))]
     val_samples = treccar_dataset.val_samples
     test_samples = treccar_dataset.test_samples
     val_rand, val_nmi = do_eval(val_samples, trained_qs_model)
@@ -144,7 +145,7 @@ def treccar_clustering_fixed_emb_attn_model(train_samples,
         val_psg_embs[s.q] = emb_model.encode(s.para_texts, convert_to_tensor=True)
     for s in test_samples:
         test_psg_embs[s.q] = emb_model.encode(s.para_texts, convert_to_tensor=True)
-    model = QuerySpecificAttentionFixedEmbedClusteringModel(emb_dim, attn_emb_dim, num_attn_head, device, kmeans_plus, True)
+    model = QuerySpecificAttentionFixedEmbedClusteringModel(emb_dim, attn_emb_dim, num_attn_head, device, kmeans_plus)
     model_params = list(model.named_parameters())
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
     optimizer_grouped_parameters = [
@@ -375,8 +376,8 @@ def main():
     parser.add_argument('-lr', '--lrate', type=float, default=2e-5)
     parser.add_argument('-ep', '--epochs', type=int, default=2)
     parser.add_argument('-ed', '--emb_dim', type=int, default=256)
-    parser.add_argument('-ad', '--attn_emb_dim', type=int, default=32)
-    parser.add_argument('-na', '--num_attn_head', type=int, default=1)
+    parser.add_argument('-ad', '--attn_emb_dim', type=int, default=4608)
+    parser.add_argument('-na', '--num_attn_head', type=int, default=12)
     parser.add_argument('--nq', action='store_true', default=False)
     parser.add_argument('--kp', action='store_true', default=False)
 
