@@ -165,7 +165,8 @@ class QuerySpecificClusteringModel(nn.Module):
         self.device = device
         emb_model = models.Transformer(trans_model_name, max_seq_length=max_len)
         pool_model = models.Pooling(emb_model.get_word_embedding_dimension())
-        dense_model = models.Dense(in_features=pool_model.get_sentence_embedding_dimension(), out_features=emb_dim, activation_function=nn.Tanh())
+        if emb_dim is not None:
+            dense_model = models.Dense(in_features=pool_model.get_sentence_embedding_dimension(), out_features=emb_dim, activation_function=nn.Tanh())
         self.qp_model = SentenceTransformer(modules=[emb_model, pool_model]).to(device)
         self.dkm = DKM()
         self.use_kmeans_plus = kmeans_plus
@@ -206,33 +207,43 @@ class QuerySpecificClusteringModel(nn.Module):
 
 
 class QuerySpecificAttentionClusteringModel(nn.Module):
-    def __init__(self, trans_model_name, attn_emb_dim, num_attn_head, device, max_len, kmeans_plus=False):
+    def __init__(self, trans_model_name, emb_dim, attn_dim, num_attn_head, device, max_len, kmeans_plus=False):
         super(QuerySpecificAttentionClusteringModel, self).__init__()
         self.device = device
-        emb_model = models.Transformer(trans_model_name, max_seq_length=max_len)
-        self.emb_dim = emb_model.get_word_embedding_dimension()
-        pool_model = models.Pooling(self.emb_dim)
-        self.qp_model = SentenceTransformer(modules=[emb_model, pool_model]).to(device)
-        self.attn_emb_dim = attn_emb_dim
+        if isinstance(trans_model_name, nn.Module):
+            self.qp_model = trans_model_name
+            self.emb_dim = self.qp_model.get_sentence_embedding_dimension()
+        else:
+            emb_model = models.Transformer(trans_model_name, max_seq_length=max_len)
+            pool_model = models.Pooling(emb_model.get_word_embedding_dimension())
+            if emb_dim is not None:
+                dense_model = models.Dense(in_features=pool_model.get_sentence_embedding_dimension(), out_features=emb_dim,
+                                       activation_function=nn.Tanh())
+                self.emb_dim = emb_dim
+            else:
+                self.emb_dim = emb_model.get_word_embedding_dimension()
+            self.qp_model = SentenceTransformer(modules=[emb_model, pool_model])
+        if attn_dim is not None:
+            self.attn_dim = attn_dim
+        else:
+            self.attn_dim = self.emb_dim
         self.num_attn_head = num_attn_head
-        self.qw = nn.Parameter(torch.randn(self.emb_dim, self.attn_emb_dim, device=device, dtype=torch.float32,
-                                           requires_grad=True))
-        self.kw = nn.Parameter(torch.randn(self.emb_dim, self.attn_emb_dim, device=device, dtype=torch.float32,
-                                           requires_grad=True))
-        self.vw = nn.Parameter(torch.randn(self.emb_dim, self.attn_emb_dim, device=device, dtype=torch.float32,
-                                           requires_grad=True))
-        self.self_attn = torch.nn.MultiheadAttention(self.attn_emb_dim, self.num_attn_head, batch_first=True).to(device)
+        self.self_attn = torch.nn.MultiheadAttention(self.attn_dim, self.num_attn_head, batch_first=True)
+        self.fc1 = nn.Linear(self.emb_dim, self.attn_dim)
+        self.fc2 = nn.Linear(self.attn_dim, self.emb_dim)
+        self.act = nn.ReLU()
         self.dkm = DKM()
+        self.layer_norm = nn.LayerNorm(self.emb_dim)
         self.use_kmeans_plus = kmeans_plus
 
     def forward(self, input_features, k_cl):
-        self.qp = self.qp_model(input_features)['sentence_embedding']
+        self.qp_orig = self.qp_model(input_features)['sentence_embedding']
+        self.qp = self.act(self.fc1(self.qp_orig))
         #self.qp = self.qp_model.encode(input_texts, convert_to_tensor=True)
-        self.q = torch.unsqueeze(torch.matmul(self.qp, self.qw), 0)
-        self.k = torch.unsqueeze(torch.matmul(self.qp, self.kw), 0)
-        self.v = torch.unsqueeze(torch.matmul(self.qp, self.vw), 0)
-        self.qp_tr, self.attn_wt = self.self_attn(self.q, self.k, self.v)
+        self.qp_tr, self.attn_wt = self.self_attn(self.qp.unsqueeze(0), self.qp.unsqueeze(0), self.qp.unsqueeze(0))
         self.qp_tr = torch.squeeze(self.qp_tr, 0)
+        self.qp_tr = self.act(self.fc2(self.qp_tr))
+        self.qp_tr = self.layer_norm(self.qp_orig + self.qp_tr)
         if self.use_kmeans_plus:
             qp_tr = self.qp_tr.detach().clone().cpu().numpy()
             init_c, _ = kmeans_plusplus(qp_tr, k_cl)
@@ -242,23 +253,27 @@ class QuerySpecificAttentionClusteringModel(nn.Module):
         self.C, self.a = self.dkm(self.qp_tr, init_c)
         return self.C, self.a
 
-    def get_embedding(self, input_features):
-        self.qp = self.qp_model(input_features)['sentence_embedding']
+    def get_embedding(self, input_texts):
+        self.qp_orig = self.qp_model.encode(input_texts, convert_to_tensor=True)
+        self.qp = self.act(self.fc1(self.qp_orig))
         #self.qp = self.qp_model.encode(input_texts, convert_to_tensor=True)
-        self.q = torch.unsqueeze(torch.matmul(self.qp, self.qw), 0)
-        self.k = torch.unsqueeze(torch.matmul(self.qp, self.kw), 0)
-        self.v = torch.unsqueeze(torch.matmul(self.qp, self.vw), 0)
-        self.qp_tr, self.attn_wt = self.self_attn(self.q, self.k, self.v)
+        self.qp_tr, self.attn_wt = self.self_attn(self.qp.unsqueeze(0), self.qp.unsqueeze(0), self.qp.unsqueeze(0))
         self.qp_tr = torch.squeeze(self.qp_tr, 0)
+        self.qp_tr = self.act(self.fc2(self.qp_tr))
+        self.qp_tr = self.layer_norm(self.qp_orig + self.qp_tr)
         return self.qp_tr
 
-    def get_clustering(self, embeddings, k_cl, debug_switch=False):
+    def get_embedding_without_attn(self, input_texts):
+        self.qp = self.qp_model.encode(input_texts, convert_to_tensor=True)
+        return self.qp
+
+    def get_clustering(self, embeddings_orig, k_cl, debug_switch=False):
         #self.qp = self.qp_model(input_features)['sentence_embedding']
-        q = torch.unsqueeze(torch.matmul(embeddings, self.qw), 0)
-        k = torch.unsqueeze(torch.matmul(embeddings, self.kw), 0)
-        v = torch.unsqueeze(torch.matmul(embeddings, self.vw), 0)
-        embeddings_tr, attn_wt = self.self_attn(q, k, v)
+        embeddings = self.act(self.fc1(embeddings_orig))
+        embeddings_tr, attn_wt = self.self_attn(embeddings.unsqueeze(0), embeddings.unsqueeze(0), embeddings.unsqueeze(0))
         embeddings_tr = torch.squeeze(embeddings_tr, 0)
+        embeddings_tr = self.act(self.fc2(embeddings_tr))
+        embeddings_tr = self.layer_norm(embeddings_orig + embeddings_tr)
         if self.use_kmeans_plus:
             embeddings_tr = embeddings_tr.detach().clone().cpu().numpy()
             init_c, _ = kmeans_plusplus(embeddings_tr, k_cl)
@@ -278,31 +293,31 @@ class QuerySpecificAttentionClusteringModel(nn.Module):
 
 
 class QuerySpecificAttentionFixedEmbedClusteringModel(nn.Module):
-    def __init__(self, emb_dim, attn_emb_dim, num_attn_head, device, kmeans_plus=False, debug_mode=False):
+    def __init__(self, emb_dim, attn_dim, num_attn_head, device, kmeans_plus=False, debug_mode=False):
         super(QuerySpecificAttentionFixedEmbedClusteringModel, self).__init__()
+        assert attn_dim % num_attn_head == 0
+        self.alpha = 0.5
         self.device = device
         self.emb_dim = emb_dim
-        self.attn_emb_dim = attn_emb_dim
+        self.attn_dim = attn_dim
         self.num_attn_head = num_attn_head
-        self.qw = nn.Parameter(torch.randn(self.emb_dim, self.attn_emb_dim, device=device, dtype=torch.float32,
-                                           requires_grad=True))
-        self.kw = nn.Parameter(torch.randn(self.emb_dim, self.attn_emb_dim, device=device, dtype=torch.float32,
-                                           requires_grad=True))
-        self.vw = nn.Parameter(torch.randn(self.emb_dim, self.attn_emb_dim, device=device, dtype=torch.float32,
-                                           requires_grad=True))
-        self.self_attn = torch.nn.MultiheadAttention(self.attn_emb_dim, self.num_attn_head, batch_first=True, dropout=0.1).to(device)
+        self.self_attn = torch.nn.MultiheadAttention(self.attn_dim, self.num_attn_head, batch_first=True,
+                                                     dropout=0.1).to(device)
+        self.fc1 = nn.Linear(self.emb_dim, self.attn_dim)
+        self.fc2 = nn.Linear(self.attn_dim, self.emb_dim)
+        self.act = nn.ReLU()
         self.dkm = DKM()
-        self.layer_norm = nn.LayerNorm(self.emb_dim)
+        self.layer_norm = nn.LayerNorm(self.emb_dim).to(device)
         self.use_kmeans_plus = kmeans_plus
         self.debug = debug_mode
 
-    def forward(self, input_embeddings, k_cl):
-        self.q = torch.unsqueeze(torch.matmul(input_embeddings, self.qw), 0)
-        self.k = torch.unsqueeze(torch.matmul(input_embeddings, self.kw), 0)
-        self.v = torch.unsqueeze(torch.matmul(input_embeddings, self.vw), 0)
-        self.input_emb_tr, self.attn_wt = self.self_attn(self.q / np.sqrt(self.attn_emb_dim), self.k, self.v)
+    def forward(self, original_embeddings, k_cl):
+        input_embeddings = self.act(self.fc1(original_embeddings))
+        self.input_emb_tr, self.attn_wt = self.self_attn(input_embeddings.unsqueeze(0), input_embeddings.unsqueeze(0),
+                                                         input_embeddings.unsqueeze(0))
         self.input_emb_tr = torch.squeeze(self.input_emb_tr, 0)
-        self.input_emb_tr = self.layer_norm(input_embeddings + self.input_emb_tr)
+        self.input_emb_tr = self.act(self.fc2(self.input_emb_tr))
+        self.input_emb_tr = self.layer_norm((1 - self.alpha) * original_embeddings + self.alpha * self.input_emb_tr)
         if self.debug:
             attn_wt_np = self.attn_wt.detach().clone().cpu().numpy()
         if self.use_kmeans_plus:
@@ -314,22 +329,21 @@ class QuerySpecificAttentionFixedEmbedClusteringModel(nn.Module):
         self.C, self.a = self.dkm(self.input_emb_tr, init_c)
         return self.C, self.a
 
-    def get_transformed_embedding(self, input_embeddings):
-        self.q = torch.unsqueeze(torch.matmul(input_embeddings, self.qw), 0)
-        self.k = torch.unsqueeze(torch.matmul(input_embeddings, self.kw), 0)
-        self.v = torch.unsqueeze(torch.matmul(input_embeddings, self.vw), 0)
-        self.input_emb_tr, self.attn_wt = self.self_attn(self.q / np.sqrt(self.attn_emb_dim), self.k, self.v)
+    def get_transformed_embedding(self, original_embeddings):
+        input_embeddings = self.act(self.fc1(original_embeddings))
+        self.input_emb_tr, self.attn_wt = self.self_attn(input_embeddings.unsqueeze(0), input_embeddings.unsqueeze(0),
+                                                         input_embeddings.unsqueeze(0))
         self.input_emb_tr = torch.squeeze(self.input_emb_tr, 0)
-        self.input_emb_tr = self.layer_norm(input_embeddings + self.input_emb_tr)
+        self.input_emb_tr = self.act(self.fc2(self.input_emb_tr))
+        self.input_emb_tr = self.layer_norm((1 - self.alpha) * original_embeddings + self.alpha * self.input_emb_tr)
         return self.input_emb_tr
 
-    def get_clustering(self, embeddings, k_cl, debug_switch=False):
-        q = torch.unsqueeze(torch.matmul(embeddings, self.qw), 0)
-        k = torch.unsqueeze(torch.matmul(embeddings, self.kw), 0)
-        v = torch.unsqueeze(torch.matmul(embeddings, self.vw), 0)
-        embeddings_tr, attn_wt = self.self_attn(q / np.sqrt(self.attn_emb_dim), k, v)
+    def get_clustering(self, original_embeddings, k_cl, debug_switch=False):
+        embeddings = self.act(self.fc1(original_embeddings))
+        embeddings_tr, attn_wt = self.self_attn(embeddings.unsqueeze(0), embeddings.unsqueeze(0), embeddings.unsqueeze(0))
         embeddings_tr = torch.squeeze(embeddings_tr, 0)
-        embeddings_tr = self.layer_norm(embeddings + embeddings_tr)
+        embeddings_tr = self.act(self.fc2(embeddings_tr))
+        embeddings_tr = self.layer_norm((1 - self.alpha) * original_embeddings + self.alpha * embeddings_tr)
         if self.use_kmeans_plus:
             embeddings_tr = embeddings_tr.detach().clone().cpu().numpy()
             init_c, _ = kmeans_plusplus(embeddings_tr, k_cl)

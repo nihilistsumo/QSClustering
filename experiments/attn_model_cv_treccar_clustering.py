@@ -26,20 +26,16 @@ def put_features_in_device(input_features, device):
             input_features[key] = input_features[key].to(device)
 
 
-def do_eval(test_samples, model, qc=None, triplet_model=False):
+def do_eval(test_samples, model, triplet_model=False):
     model.eval()
     rand_dict, nmi_dict = {}, {}
     for s in test_samples:
         true_labels = s.para_labels
         k = len(set(true_labels))
         if triplet_model:
-            input_texts = s.para_texts
-            embeddings = model.emb_model.encode(input_texts, convert_to_tensor=True)
+            embeddings = model.emb_model.encode(s.para_texts, convert_to_tensor=True)
         else:
-            texts = s.para_texts
-            query_content = s.q.split('enwiki:')[1].replace('%20', ' ')
-            input_texts = [(query_content, t) for t in texts]
-            embeddings = model.qp_model.encode(input_texts, convert_to_tensor=True)
+            embeddings = model.get_embedding_without_attn(s.para_texts)
         pred_labels = model.get_clustering(embeddings, k)
         rand = adjusted_rand_score(true_labels, pred_labels)
         nmi = normalized_mutual_info_score(true_labels, pred_labels)
@@ -72,7 +68,7 @@ def treccar_clustering_fixed_emb_attn_model_full_train(treccar_full_data_file,
                                     lrate,
                                     num_epochs,
                                     emb_model,
-                                    attn_emb_dim,
+                                    attn_dim,
                                     num_attn_head,
                                     kmeans_plus,
                                     output_path):
@@ -81,7 +77,7 @@ def treccar_clustering_fixed_emb_attn_model_full_train(treccar_full_data_file,
     val_samples = treccar_dataset.val_samples
     test_samples = treccar_dataset.test_samples
     treccar_clustering_fixed_emb_attn_model(train_samples, val_samples, test_samples, device, loss_name, max_grad_norm,
-                                            weight_decay, warmup, lrate, num_epochs, emb_model, attn_emb_dim,
+                                            weight_decay, warmup, lrate, num_epochs, emb_model, attn_dim,
                                             num_attn_head, kmeans_plus, output_path)
 
 
@@ -94,7 +90,7 @@ def treccar_clustering_fixed_emb_attn_model_existing_emb(treccar_full_data_file,
                                     lrate,
                                     num_epochs,
                                     trained_qs_model,
-                                    attn_emb_dim,
+                                    attn_dim,
                                     num_attn_head,
                                     kmeans_plus,
                                     output_path):
@@ -118,7 +114,7 @@ def treccar_clustering_fixed_emb_attn_model_existing_emb(treccar_full_data_file,
     ))
     emb_model = trained_qs_model.qp_model
     treccar_clustering_fixed_emb_attn_model(train_samples, val_samples, test_samples, device, loss_name, max_grad_norm,
-                                            weight_decay, warmup, lrate, num_epochs, emb_model, attn_emb_dim,
+                                            weight_decay, warmup, lrate, num_epochs, emb_model, attn_dim,
                                             num_attn_head, kmeans_plus, output_path)
 
 
@@ -133,7 +129,7 @@ def treccar_clustering_fixed_emb_attn_model(train_samples,
                                     lrate,
                                     num_epochs,
                                     emb_model,
-                                    attn_emb_dim,
+                                    attn_dim,
                                     num_attn_head,
                                     kmeans_plus,
                                     output_path):
@@ -145,7 +141,7 @@ def treccar_clustering_fixed_emb_attn_model(train_samples,
         val_psg_embs[s.q] = emb_model.encode(s.para_texts, convert_to_tensor=True)
     for s in test_samples:
         test_psg_embs[s.q] = emb_model.encode(s.para_texts, convert_to_tensor=True)
-    model = QuerySpecificAttentionFixedEmbedClusteringModel(emb_dim, attn_emb_dim, num_attn_head, device, kmeans_plus)
+    model = QuerySpecificAttentionFixedEmbedClusteringModel(emb_dim, attn_dim, num_attn_head, device, kmeans_plus).to(device)
     model_params = list(model.named_parameters())
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
     optimizer_grouped_parameters = [
@@ -187,7 +183,7 @@ def treccar_clustering_fixed_emb_attn_model(train_samples,
             opt.step()
             opt.zero_grad()
             schd.step()
-            if (idx + 1) % 5000 == 0:
+            if (idx + 1) % 1000 == 0:
                 val_rand, val_nmi = do_attn_fixed_emb_eval(val_samples, val_psg_embs, model, device)
                 test_rand, test_nmi = do_attn_fixed_emb_eval(test_samples, test_psg_embs, model, device)
                 print(
@@ -217,7 +213,7 @@ def treccar_clustering_fixed_emb_attn_model(train_samples,
     if output_path is not None:
         print('Saving the trained model...')
         torch.save(model.state_dict(), output_path + '.model')
-        model = QuerySpecificAttentionFixedEmbedClusteringModel(attn_emb_dim, num_attn_head, device, kmeans_plus)
+        model = QuerySpecificAttentionFixedEmbedClusteringModel(emb_dim, num_attn_head, device, kmeans_plus)
         model.load_state_dict(torch.load(output_path + '.model'))
     val_rand, val_nmi = do_attn_fixed_emb_eval(val_samples, val_psg_embs, model, device)
     test_rand, test_nmi = do_attn_fixed_emb_eval(test_samples, test_psg_embs, model, device)
@@ -238,27 +234,34 @@ def treccar_clustering_fixed_emb_attn_model(train_samples,
 def treccar_clustering_attn_model_full_train(treccar_full_data_file,
                                     device,
                                     loss_name,
-                                    query_context_ref,
                                     max_num_tokens,
                                     max_grad_norm,
                                     weight_decay,
                                     warmup,
                                     lrate,
                                     num_epochs,
+                                    emb_model_path,
                                     emb_model_name,
-                                    attn_emb_dim,
+                                    emb_dim,
+                                    attn_dim,
                                     num_attn_head,
                                     kmeans_plus,
                                     output_path):
-    if query_context_ref is not None:
-        with open(query_context_ref, 'r') as f:
-            qc = json.load(f)
     treccar_dataset = np.load(treccar_full_data_file, allow_pickle=True)[()]['data']
+    train_samples = [treccar_dataset[i] for i in range(len(treccar_dataset))]
+    #train_samples = treccar_dataset.val_samples
     val_samples = treccar_dataset.val_samples
     test_samples = treccar_dataset.test_samples
     num_steps_per_epoch = len(treccar_dataset)
     num_train_steps = num_epochs * num_steps_per_epoch
-    model = QuerySpecificAttentionClusteringModel(emb_model_name, attn_emb_dim, num_attn_head, device, max_num_tokens, kmeans_plus)
+    if emb_model_path is not None:
+        m = QuerySpecificClusteringModel(emb_model_name, None, device, max_num_tokens)
+        m.load_state_dict(torch.load(emb_model_path))
+        model = QuerySpecificAttentionClusteringModel(m.qp_model, emb_dim, attn_dim, num_attn_head, device,
+                                                      max_num_tokens, kmeans_plus).to(device)
+    else:
+        model = QuerySpecificAttentionClusteringModel(emb_model_name, emb_dim, attn_dim, num_attn_head, device,
+                                                  max_num_tokens, kmeans_plus).to(device)
     model_params = list(model.named_parameters())
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
     optimizer_grouped_parameters = [
@@ -268,12 +271,8 @@ def treccar_clustering_attn_model_full_train(treccar_full_data_file,
     ]
     opt = AdamW(optimizer_grouped_parameters, lr=lrate)
     schd = transformers.get_linear_schedule_with_warmup(opt, warmup, num_epochs * num_train_steps)
-    if query_context_ref is not None:
-        val_rand, val_nmi = do_eval(val_samples, model, qc)
-        test_rand, test_nmi = do_eval(test_samples, model, qc)
-    else:
-        val_rand, val_nmi = do_eval(val_samples, model)
-        test_rand, test_nmi = do_eval(test_samples, model)
+    val_rand, val_nmi = do_eval(val_samples, model)
+    test_rand, test_nmi = do_eval(test_samples, model)
     print('\nInitial evaluation')
     print('Mean Val RAND %.4f +- %.4f, Val NMI %.4f +- %.4f Test RAND %.4f +- %.4f, Test NMI %.4f +- %.4f' % (
         np.mean(list(val_rand.values())),
@@ -290,13 +289,12 @@ def treccar_clustering_attn_model_full_train(treccar_full_data_file,
     else:
         loss_func = get_weighted_adj_rand_loss
     for epoch in tqdm(range(num_epochs)):
-        for idx in tqdm(range(len(treccar_dataset))):
+        for idx in tqdm(range(len(train_samples))):
             model.train()
-            sample = treccar_dataset[idx]
-            query_content = sample.q.split('enwiki:')[1].replace('%20', ' ')
+            sample = train_samples[idx]
             n = len(sample.paras)
             k = len(set(sample.para_labels))
-            input_texts = [(query_content, t) for t in sample.para_texts]
+            input_texts = sample.para_texts
             input_features = model.qp_model.tokenize(input_texts)
             put_features_in_device(input_features, device)
             # print(GPUtil.showUtilization())
@@ -309,12 +307,8 @@ def treccar_clustering_attn_model_full_train(treccar_full_data_file,
             opt.zero_grad()
             schd.step()
             if (idx + 1) % 1000 == 0:
-                if query_context_ref is not None:
-                    val_rand, val_nmi = do_eval(val_samples, model, qc)
-                    test_rand, test_nmi = do_eval(test_samples, model, qc)
-                else:
-                    val_rand, val_nmi = do_eval(val_samples, model)
-                    test_rand, test_nmi = do_eval(test_samples, model)
+                val_rand, val_nmi = do_eval(val_samples, model)
+                test_rand, test_nmi = do_eval(test_samples, model)
                 print(
                     'Mean Val RAND %.4f +- %.4f, Val NMI %.4f +- %.4f Test RAND %.4f +- %.4f, Test NMI %.4f +- %.4f' % (
                         np.mean(list(val_rand.values())),
@@ -329,14 +323,11 @@ def treccar_clustering_attn_model_full_train(treccar_full_data_file,
     if output_path is not None:
         print('Saving the trained model...')
         torch.save(model.state_dict(), output_path + '.model')
-        model = QuerySpecificAttentionClusteringModel(emb_model_name, attn_emb_dim, num_attn_head, device, max_num_tokens, kmeans_plus)
+        model = QuerySpecificAttentionClusteringModel(emb_model_name, emb_dim, attn_dim, num_attn_head, device,
+                                                  max_num_tokens, kmeans_plus)
         model.load_state_dict(torch.load(output_path + '.model'))
-    if query_context_ref is not None:
-        val_rand, val_nmi = do_eval(val_samples, model, qc)
-        test_rand, test_nmi = do_eval(test_samples, model, qc)
-    else:
-        val_rand, val_nmi = do_eval(val_samples, model)
-        test_rand, test_nmi = do_eval(test_samples, model)
+    val_rand, val_nmi = do_eval(val_samples, model)
+    test_rand, test_nmi = do_eval(test_samples, model)
     print('Final Evaluation')
     print('================')
     print('Mean Val RAND %.4f +- %.4f, Val NMI %.4f +- %.4f Test RAND %.4f +- %.4f, Test NMI %.4f +- %.4f' % (
@@ -368,6 +359,8 @@ def main():
     parser.add_argument('-ls', '--loss', help='Loss func to use for QSC', default='adj')
     parser.add_argument('-qc', '--query_con', help='Path to query-context json file', default=None)
     parser.add_argument('-mn', '--emb_model_name', help='SBERT embedding model name', default='sentence-transformers/all-MiniLM-L6-v2')
+    parser.add_argument('-ed', '--emb_dim', type=int, help='Embedding dim of the sbert model if we use a NN layer on top', default=None)
+    parser.add_argument('-ad', '--attn_emb_dim', type=int, help='Embedding dim of the attention model', default=None)
     parser.add_argument('-mp', '--emb_model_path', help='Path to existing trained QS clustering model', default=None)
     parser.add_argument('-nt', '--max_num_tokens', help='Max no. of tokens', type=int, default=128)
     parser.add_argument('-gn', '--max_grad_norm', help='Max gradient norm', type=float, default=1.0)
@@ -375,9 +368,7 @@ def main():
     parser.add_argument('-wu', '--warmup', type=int, default=1000)
     parser.add_argument('-lr', '--lrate', type=float, default=2e-5)
     parser.add_argument('-ep', '--epochs', type=int, default=2)
-    parser.add_argument('-ed', '--emb_dim', type=int, default=256)
-    parser.add_argument('-ad', '--attn_emb_dim', type=int, default=4608)
-    parser.add_argument('-na', '--num_attn_head', type=int, default=12)
+    parser.add_argument('-na', '--num_attn_head', type=int, default=4)
     parser.add_argument('--nq', action='store_true', default=False)
     parser.add_argument('--kp', action='store_true', default=False)
 
@@ -396,14 +387,14 @@ def main():
     elif args.experiment == 2:
         m = QuerySpecificClusteringModel(args.emb_model_name, args.emb_dim, device, args.max_num_tokens)
         m.load_state_dict(torch.load(args.emb_model_path))
-        treccar_clustering_fixed_emb_attn_model_existing_emb(args.treccar_data, device, args.loss,
-                                        args.max_grad_norm, args.weight_decay, args.warmup, args.lrate, args.epochs,
-                                        m, args.attn_emb_dim, args.num_attn_head,
-                                        args.kp, args.output_path,)
+        treccar_clustering_fixed_emb_attn_model_existing_emb(args.treccar_data, device, args.loss, args.max_grad_norm,
+                                                             args.weight_decay, args.warmup, args.lrate, args.epochs,
+                                                             m, args.attn_emb_dim, args.num_attn_head, args.kp, args.output_path)
     elif args.experiment == 3:
-        treccar_clustering_attn_model_full_train(args.treccar_data, device, args.loss, args.query_con, args.max_num_tokens,
+        treccar_clustering_attn_model_full_train(args.treccar_data, device, args.loss, args.max_num_tokens,
                                         args.max_grad_norm, args.weight_decay, args.warmup, args.lrate, args.epochs,
-                                        args.emb_model_name, args.attn_emb_dim, args.num_attn_head, args.kp, args.output_path)
+                                        args.emb_model_path, args.emb_model_name, args.emb_dim, args.attn_emb_dim,
+                                        args.num_attn_head, args.kp, args.output_path)
 
 
 if __name__ == '__main__':
