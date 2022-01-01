@@ -207,7 +207,20 @@ class QuerySpecificClusteringModel(nn.Module):
 
 
 class QuerySpecificAttentionClusteringModel(nn.Module):
+
     def __init__(self, trans_model_name, emb_dim, attn_dim, num_attn_head, device, max_len, kmeans_plus=False):
+        """
+        :param trans_model_name: The sbert model name or a pre-trained sbert model.
+        :param emb_dim: Embedding dimension; if a pre-trained sbert model is given, this parameter will get the correct
+        value from the model. If it is None, then no dense layer will be added to the sbert model and it will get the
+        value of the pooling layer of the sbert model. Else, a dense layer with emb_dim output shape will be added.
+        :param attn_dim: Dimension of the self-attention module. If None is given, then it will take the same value as
+        emb_dim.
+        :param num_attn_head: No. of attention heads.
+        :param device: CUDA device.
+        :param max_len: Max length of tokens accepted by the sbert model.
+        :param kmeans_plus: Whether to use k-means++ for initialization of the DKM module.
+        """
         super(QuerySpecificAttentionClusteringModel, self).__init__()
         self.device = device
         if isinstance(trans_model_name, nn.Module):
@@ -233,17 +246,17 @@ class QuerySpecificAttentionClusteringModel(nn.Module):
         self.fc2 = nn.Linear(self.attn_dim, self.emb_dim)
         self.act = nn.ReLU()
         self.dkm = DKM()
-        self.layer_norm = nn.LayerNorm(self.emb_dim)
+        self.layer_norm = nn.LayerNorm(2*self.emb_dim)
         self.use_kmeans_plus = kmeans_plus
 
     def forward(self, input_features, k_cl):
         self.qp_orig = self.qp_model(input_features)['sentence_embedding']
         self.qp = self.act(self.fc1(self.qp_orig))
-        #self.qp = self.qp_model.encode(input_texts, convert_to_tensor=True)
         self.qp_tr, self.attn_wt = self.self_attn(self.qp.unsqueeze(0), self.qp.unsqueeze(0), self.qp.unsqueeze(0))
         self.qp_tr = torch.squeeze(self.qp_tr, 0)
         self.qp_tr = self.act(self.fc2(self.qp_tr))
-        self.qp_tr = self.layer_norm(self.qp_orig + self.qp_tr)
+        #self.qp_tr = self.layer_norm(self.qp_orig + self.qp_tr)
+        self.qp_tr = self.layer_norm(torch.hstack((self.qp_orig, self.qp_tr)))
         if self.use_kmeans_plus:
             qp_tr = self.qp_tr.detach().clone().cpu().numpy()
             init_c, _ = kmeans_plusplus(qp_tr, k_cl)
@@ -260,7 +273,8 @@ class QuerySpecificAttentionClusteringModel(nn.Module):
         self.qp_tr, self.attn_wt = self.self_attn(self.qp.unsqueeze(0), self.qp.unsqueeze(0), self.qp.unsqueeze(0))
         self.qp_tr = torch.squeeze(self.qp_tr, 0)
         self.qp_tr = self.act(self.fc2(self.qp_tr))
-        self.qp_tr = self.layer_norm(self.qp_orig + self.qp_tr)
+        #self.qp_tr = self.layer_norm(self.qp_orig + self.qp_tr)
+        self.qp_tr = self.layer_norm(torch.hstack((self.qp_orig, self.qp_tr)))
         return self.qp_tr
 
     def get_embedding_without_attn(self, input_texts):
@@ -273,7 +287,8 @@ class QuerySpecificAttentionClusteringModel(nn.Module):
         embeddings_tr, attn_wt = self.self_attn(embeddings.unsqueeze(0), embeddings.unsqueeze(0), embeddings.unsqueeze(0))
         embeddings_tr = torch.squeeze(embeddings_tr, 0)
         embeddings_tr = self.act(self.fc2(embeddings_tr))
-        embeddings_tr = self.layer_norm(embeddings_orig + embeddings_tr)
+        #embeddings_tr = self.layer_norm(embeddings_orig + embeddings_tr)
+        embeddings_tr = self.layer_norm(torch.hstack((embeddings_orig, embeddings_tr)))
         if self.use_kmeans_plus:
             embeddings_tr = embeddings_tr.detach().clone().cpu().numpy()
             init_c, _ = kmeans_plusplus(embeddings_tr, k_cl)
