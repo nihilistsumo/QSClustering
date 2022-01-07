@@ -9,7 +9,7 @@ random.seed(42)
 
 
 # Both gt and a are n x k matrix
-def get_nmi_loss(a, para_labels, device):
+def get_nmi_loss(a, c, para_labels, device, from_attn=True):
     n = len(para_labels)
     unique_labels = list(set(para_labels))
     k = len(unique_labels)
@@ -26,7 +26,7 @@ def get_nmi_loss(a, para_labels, device):
     return -nmi
 
 
-def get_weighted_adj_rand_loss(a, para_labels, device):
+def get_weighted_adj_rand_loss(a, c, para_labels, device, from_attn=True):
     n = len(para_labels)
     unique_labels = list(set(para_labels))
     gt = torch.zeros(n, n, device=device)
@@ -37,7 +37,10 @@ def get_weighted_adj_rand_loss(a, para_labels, device):
             if para_labels[i] == para_labels[j]:
                 gt[i][j] = 1.0
                 gt_weights[i][j] = para_label_freq[para_labels[i]]
-    dist_mat = torch.cdist(a, a)
+    if from_attn:
+        dist_mat = torch.cdist(a, a)
+    else:
+        dist_mat = torch.cdist(torch.matmul(a, c), torch.matmul(a, c))
     sim_mat = 1 / (1 + dist_mat)
     loss = torch.sum(((gt - sim_mat) ** 2) * gt_weights) / gt.shape[0]
     #loss = torch.sum(gt * dist_mat) / gt.shape[0] ** 2 - torch.sum((1 - gt) * dist_mat) / gt.shape[0] ** 2
