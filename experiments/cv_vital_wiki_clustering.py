@@ -8,7 +8,7 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 import torch.nn as nn
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
-from core.clustering import QuerySpecificClusteringModel, SBERTTripletLossModel, get_nmi_loss, \
+from core.clustering import QuerySpecificClusteringModel, SBERTTripletLossModel, get_nmi_loss, get_adj_rand_loss, \
     get_weighted_adj_rand_loss, QuerySpecificDKM, QuerySpecificClusteringModelWithSection
 from tqdm import tqdm, trange
 import json
@@ -109,6 +109,8 @@ def vital_wiki_clustering_single_model(vital_wiki_2cv_data_file,
                                                             np.std(list(test_nmi.values()), ddof=1) / np.sqrt(len(test_nmi.keys()))))
         if loss_name == 'nmi':
             loss_func = get_nmi_loss
+        elif loss_name == 'ari':
+            loss_func = get_adj_rand_loss
         else:
             loss_func = get_weighted_adj_rand_loss
         for epoch in tqdm(range(num_epochs)):
