@@ -47,6 +47,26 @@ def get_weighted_adj_rand_loss(a, c, para_labels, device, from_attn=True):
     return loss
 
 
+def get_adj_rand_loss(a, c, para_labels, device, from_attn=True):
+    n = len(para_labels)
+    unique_labels = list(set(para_labels))
+    GT = torch.zeros(n, n, device=device)
+    for i in range(n):
+        for j in range(n):
+            if para_labels[i] == para_labels[j]:
+                GT[i][j] = 1.0
+    M = torch.matmul(GT.T, a)
+    g = torch.sum(GT, dim=0)
+    c = torch.sum(a, dim=0)
+    rand = 0.5 * torch.sum(M**2 - M)
+    expected = 0.5 * torch.sum(g**2 - g) * torch.sum(c**2 - c) / (n**2 - n)
+    maximum = 0.25 * (torch.sum(g**2 - g) + torch.sum(c**2 - c))
+    ari = (rand - expected) / (maximum - expected)
+    loss = -ari
+    return loss
+
+
+
 class DKM(nn.Module):
 
     def __init__(self, temp=0.5, threshold=0.0001, max_iter=100, eps=1e-6):
