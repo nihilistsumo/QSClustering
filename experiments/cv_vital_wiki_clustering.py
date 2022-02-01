@@ -127,7 +127,7 @@ def vital_wiki_clustering_single_model(vital_wiki_2cv_data_file,
                 put_features_in_device(input_features, device)
                 #print(GPUtil.showUtilization())
                 mc, ma = model(input_features, k)
-                loss = loss_func(ma, sample.para_labels, device)
+                loss = loss_func(ma, mc, sample.para_labels, device)
                 loss.backward()
                 running_loss += loss.item()
                 #print(batch.q + ' %d paras, Loss %.4f' % (len(batch.paras), loss.detach().item()))
