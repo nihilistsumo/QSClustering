@@ -95,7 +95,7 @@ def treccar_clustering_single_model(train_dataset,
         {'params': [p for n, p in model_params if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
     opt = AdamW(optimizer_grouped_parameters, lr=lrate)
-    schd = transformers.get_linear_schedule_with_warmup(opt, warmup, num_epochs * num_train_steps)
+    schd = transformers.get_linear_schedule_with_warmup(opt, warmup, num_train_steps)
     val_rand = do_eval(val_dataset, model, device)
     test_rand = do_eval(test_dataset, model, device)
     print('\nVal RAND %.4f, Test RAND %.4f' % (val_rand, test_rand))
@@ -232,25 +232,30 @@ def get_triplet_texts_from_batch(batch):
     return input_texts
 
 
-if torch.cuda.is_available():
-    device = torch.device('cuda')
-    print('CUDA is available and using device: '+str(device))
-else:
-    device = torch.device('cpu')
-    print('CUDA not available, using device: '+str(device))
+def main():
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+        print('CUDA is available and using device: '+str(device))
+    else:
+        device = torch.device('cpu')
+        print('CUDA not available, using device: '+str(device))
 
-train_articles = get_similar_treccar_articles(get_article_qrels('../data/train.pages.cbor-article.qrels').keys(), 'D:\\new_cats_data\\train\\base.train.cbor-without-by1-article.qrels', 100)
-#train_articles = random.sample(get_article_qrels('D:\\new_cats_data\\train\\base.train.cbor-without-by1-article.qrels').keys(), 5000)
+    train_articles = get_similar_treccar_articles(get_article_qrels('../data/train.pages.cbor-article.qrels').keys(), 'D:\\new_cats_data\\train\\base.train.cbor-without-by1-article.qrels', 100)
+    #train_articles = random.sample(get_article_qrels('D:\\new_cats_data\\train\\base.train.cbor-without-by1-article.qrels').keys(), 5000)
 
-train_dataset = TRECCAR_Datset('D:\\new_cats_data\\train\\base.train.cbor-without-by1-article.qrels',
-                               'D:\\new_cats_data\\train\\base.train.cbor-without-by1-toplevel.qrels',
-                               'D:\\new_cats_data\\train\\train_paratext.tsv', 35, train_articles)
+    train_dataset = TRECCAR_Datset('D:\\new_cats_data\\train\\base.train.cbor-without-by1-article.qrels',
+                                   'D:\\new_cats_data\\train\\base.train.cbor-without-by1-toplevel.qrels',
+                                   'D:\\new_cats_data\\train\\train_paratext.tsv', 35, train_articles)
 
-val_dataset = TRECCAR_Datset('../data/train.pages.cbor-article.qrels',
-                             '../data/train.pages.cbor-toplevel.qrels',
-                'D:\\new_cats_data\\benchmarkY1\\benchmarkY1-train-nodup\\by1train_paratext\\by1train_paratext.tsv', 35)
-test_dataset = TRECCAR_Datset('../data/test.pages.cbor-article.qrels',
-                              '../data/test.pages.cbor-toplevel.qrels',
-                'D:\\new_cats_data\\benchmarkY1\\benchmarkY1-test-nodup\\by1test_paratext\\by1test_paratext.tsv', 35)
-treccar_clustering_single_model(train_dataset, test_dataset, device, val_dataset)
-#treccar_clustering_baseline_sbert_triplet_model(train_dataset, test_dataset, device, val_dataset)
+    val_dataset = TRECCAR_Datset('../data/train.pages.cbor-article.qrels',
+                                 '../data/train.pages.cbor-toplevel.qrels',
+                    'D:\\new_cats_data\\benchmarkY1\\benchmarkY1-train-nodup\\by1train_paratext\\by1train_paratext.tsv', 35)
+    test_dataset = TRECCAR_Datset('../data/test.pages.cbor-article.qrels',
+                                  '../data/test.pages.cbor-toplevel.qrels',
+                    'D:\\new_cats_data\\benchmarkY1\\benchmarkY1-test-nodup\\by1test_paratext\\by1test_paratext.tsv', 35)
+    treccar_clustering_single_model(train_dataset, test_dataset, device, val_dataset)
+    #treccar_clustering_baseline_sbert_triplet_model(train_dataset, test_dataset, device, val_dataset)
+
+
+if __name__ == '__main__':
+    main()

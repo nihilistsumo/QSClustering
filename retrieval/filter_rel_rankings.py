@@ -1,21 +1,5 @@
 import numpy as np
-from util.data import get_article_qrels
-
-
-def get_page_sec_para_dict(infile):
-    page_sec_paras = {}
-    with open(infile, 'r') as f:
-        for l in f:
-            q = l.split(' ')[0]
-            p = l.split(' ')[2]
-            page = q.split('/')[0] if '/' in q else q
-            if page not in page_sec_paras.keys():
-                page_sec_paras[page] = {q: [p]}
-            elif q not in page_sec_paras[page].keys():
-                page_sec_paras[page][q] = [p]
-            else:
-                page_sec_paras[page][q].append(p)
-    return page_sec_paras
+from util.data import get_article_qrels, get_page_sec_para_dict
 
 
 def filter_rel(art_qrels, runfile, outfile):

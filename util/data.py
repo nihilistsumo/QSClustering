@@ -31,6 +31,22 @@ def get_rev_qrels(qrels):
     return para_labels
 
 
+def get_page_sec_para_dict(qrels_like_file):
+    page_sec_paras = {}
+    with open(qrels_like_file, 'r') as f:
+        for l in f:
+            q = l.split(' ')[0]
+            p = l.split(' ')[2]
+            page = q.split('/')[0] if '/' in q else q
+            if page not in page_sec_paras.keys():
+                page_sec_paras[page] = {q: [p]}
+            elif q not in page_sec_paras[page].keys():
+                page_sec_paras[page][q] = [p]
+            else:
+                page_sec_paras[page][q].append(p)
+    return page_sec_paras
+
+
 def remove_by1_from_train(train_art_qrels, train_qrels, by1train_art_qrels, by1test_art_qrels, train_art_qrels_out,
                           train_qrels_out):
     psgs_to_remove = set()
