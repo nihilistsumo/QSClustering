@@ -49,7 +49,7 @@ def do_eval(test_samples, model, qc=None, triplet_model=False, no_query=False):
     return rand_dict, nmi_dict
 
 
-def do_eval_dkm_param(test_samples, model, qc=None):
+def do_eval_dkm_param(test_samples, model):
     model.eval()
     rand_dict, nmi_dict = {}, {}
     for s in test_samples:
@@ -282,7 +282,8 @@ def vital_wiki_clustering_dkm_param_model(vital_wiki_2cv_data_file,
                                     num_epochs,
                                     emb_model_name,
                                     emb_dim,
-                                    output_path):
+                                    output_path,
+                                    learn_emb=False):
     if query_context_ref is not None:
         with open(query_context_ref, 'r') as f:
             qc = json.load(f)
@@ -324,8 +325,8 @@ def vital_wiki_clustering_dkm_param_model(vital_wiki_2cv_data_file,
                 n = len(sample.paras)
                 k = len(set(sample.para_labels))
                 #print(GPUtil.showUtilization())
-                mc, ma = model(query_content, sample.para_texts, k)
-                loss = loss_func(ma, sample.para_labels, device)
+                mc, ma = model(query_content, sample.para_texts, k, learn_emb)
+                loss = loss_func(ma, mc, sample.para_labels, device)
                 loss.backward()
                 #print(batch.q + ' %d paras, Loss %.4f' % (len(batch.paras), loss.detach().item()))
                 nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
@@ -333,9 +334,9 @@ def vital_wiki_clustering_dkm_param_model(vital_wiki_2cv_data_file,
                 opt.zero_grad()
                 schd.step()
             if query_context_ref is not None:
-                test_rand, test_nmi = do_eval(test_data_current, model, qc)
+                test_rand, test_nmi = do_eval_dkm_param(test_data_current, model, qc)
             else:
-                test_rand, test_nmi = do_eval(test_data_current, model)
+                test_rand, test_nmi = do_eval_dkm_param(test_data_current, model)
             print('Epoch %d, mean loss: %.4f, mean RAND %.4f +- %.4f, mean NMI %.4f +- %.4f' % (epoch + 1,
                                                                 running_loss / len(train_data_current),
                                                                 np.mean(list(test_rand.values())),
@@ -345,7 +346,7 @@ def vital_wiki_clustering_dkm_param_model(vital_wiki_2cv_data_file,
         if output_path is not None:
             print('Saving the trained model...')
             torch.save(model.state_dict(), output_path+'_fold'+str(i+1)+'.model')
-            model = QuerySpecificClusteringModel(emb_model_name, emb_dim, device, max_num_tokens)
+            model = QuerySpecificDKM(emb_model_name, emb_dim, device, max_num_tokens)
             model.load_state_dict(torch.load(output_path+'_fold'+str(i+1)+'.model'))
         print('Evaluation Fold %d' % (i+1))
         print('=================')
@@ -496,6 +497,11 @@ def main():
                                            args.max_grad_norm, args.weight_decay, args.warmup, args.lrate, args.epochs,
                                            args.model_name, args.emb_dim, args.output_path)
     elif args.experiment == 4:
+        vital_wiki_clustering_dkm_param_model(args.vital_data, device, args.loss, args.query_con, args.max_num_tokens,
+                                              args.max_grad_norm, args.weight_decay, args.warmup, args.lrate,
+                                              args.epochs,
+                                              args.model_name, args.emb_dim, args.output_path, True)
+    elif args.experiment == 5:
         vital_wiki_clustering_baseline_sbert_triplet_model(args.vital_data, device, args.max_num_tokens,
                                            args.max_grad_norm, args.weight_decay, args.warmup, args.lrate, args.epochs,
                                            args.model_name, args.emb_dim, args.output_path)

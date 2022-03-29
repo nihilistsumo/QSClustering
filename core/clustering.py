@@ -1,11 +1,18 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import Tensor
 from sentence_transformers import models, SentenceTransformer
-from sklearn.cluster import KMeans, kmeans_plusplus
+from sklearn.cluster import KMeans, kmeans_plusplus, AgglomerativeClustering
 import numpy as np
 import random
 random.seed(42)
+
+
+def put_features_in_device(input_features, device):
+    for key in input_features.keys():
+        if isinstance(input_features[key], Tensor):
+            input_features[key] = input_features[key].to(device)
 
 
 # Both gt and a are n x k matrix
@@ -162,10 +169,18 @@ class QuerySpecificDKM(nn.Module):
         self.dkm = DKM_param(emb_dim=self.emb_model.get_sentence_embedding_dimension())
         self.dkm.to(device)
 
-    def forward(self, query_content, texts, k):
+    def forward(self, query_content, texts, k, learn_emb=False):
         n = len(texts)
-        self.query_vec = torch.tensor(self.emb_model.encode([query_content]), device=self.device)
-        self.emb_vecs = torch.tensor(self.emb_model.encode(texts), device=self.device)
+        if learn_emb:
+            query_fet = self.emb_model.tokenize([(query_content, '')])
+            psg_fet = self.emb_model.tokenize([(query_content, t) for t in texts])
+            put_features_in_device(query_fet, self.device)
+            put_features_in_device(psg_fet, self.device)
+            self.query_vec = self.emb_model(query_fet)['sentence_embedding']
+            self.emb_vecs = self.emb_model(psg_fet)['sentence_embedding']
+        else:
+            self.query_vec = torch.tensor(self.emb_model.encode([query_content]), device=self.device)
+            self.emb_vecs = torch.tensor(self.emb_model.encode(texts), device=self.device)
         init_indices = random.sample(range(n), k)
         init_c = self.emb_vecs[init_indices]
         self.C, self.a = self.dkm(self.query_vec, self.emb_vecs, init_c)
@@ -227,6 +242,78 @@ class QuerySpecificClusteringModel(nn.Module):
                 print('Low std in attention matrix')
         pred_labels = torch.argmax(self.a, dim=1).detach().cpu().numpy()
         return pred_labels
+
+
+class QuerySpecificHACModel(nn.Module):
+    def __init__(self, trans_model_name, emb_dim, device, max_len):
+        super(QuerySpecificHACModel, self).__init__()
+        self.device = device
+        emb_model = models.Transformer(trans_model_name, max_seq_length=max_len)
+        pool_model = models.Pooling(emb_model.get_word_embedding_dimension())
+        if emb_dim is not None:
+            dense_model = models.Dense(in_features=pool_model.get_sentence_embedding_dimension(), out_features=emb_dim, activation_function=nn.Tanh())
+        self.qp_model = SentenceTransformer(modules=[emb_model, pool_model]).to(device)
+
+    def euclid_dist(self, x):
+        dist_mat = torch.norm(x[:, None] - x, dim=2, p=2)
+        return dist_mat
+
+    def forward(self, input_features):
+        self.qp = self.qp_model(input_features)['sentence_embedding']
+        self.qp_dist_mat = self.euclid_dist(self.qp)
+        return self.qp_dist_mat
+
+    def get_embedding(self, input_features):
+        self.qp = self.qp_model(input_features)['sentence_embedding']
+        return self.qp
+
+    def get_clustering(self, embeddings, k):
+        #self.qp = self.qp_model(input_features)['sentence_embedding']
+        dist_mat = self.euclid_dist(embeddings)
+        cl = AgglomerativeClustering(n_clusters=k, affinity='precomputed', linkage='average')
+        pred_labels = cl.fit_predict(dist_mat.detach().cpu().numpy())
+        return pred_labels
+
+
+class QS3M_HACModel(nn.Module):
+    def __init__(self, trans_model_name, emb_dim, device, max_len):
+        super(QS3M_HACModel, self).__init__()
+        self.device = device
+        emb_model = models.Transformer(trans_model_name, max_seq_length=max_len)
+        pool_model = models.Pooling(emb_model.get_word_embedding_dimension())
+        if emb_dim is not None:
+            dense_model = models.Dense(in_features=pool_model.get_sentence_embedding_dimension(), out_features=emb_dim, activation_function=nn.Tanh())
+        self.qp_model = SentenceTransformer(modules=[emb_model, pool_model]).to(device)
+        self.LL1 = nn.Linear(self.qp_model.get_sentence_embedding_dimension(), self.qp_model.get_sentence_embedding_dimension())
+        self.LL2 = nn.Linear(self.qp_model.get_sentence_embedding_dimension(), self.qp_model.get_sentence_embedding_dimension())
+        self.LL3 = nn.Linear(5 * self.qp_model.get_sentence_embedding_dimension(), 1)
+        self.act = nn.ReLU()
+        self.final_act = nn.Sigmoid()
+
+    def forward(self, query, passages):
+        query_vec = self.qp_model.encode([query], convert_to_tensor=True)
+        psg_vecs = self.qp_model.encode(passages, convert_to_tensor=True)
+        n = len(passages)
+        q_rep = query_vec.tile(n ** 2, 1)
+        p1_rep = psg_vecs.repeat_interleave(n, 0)
+        p2_rep = psg_vecs.tile(n, 1)
+        q_rep_tr = self.act(self.LL2(self.act(self.LL1(q_rep))))
+        p1_rep_tr = self.act(self.LL2(self.act(self.LL1(p1_rep))))
+        p2_rep_tr = self.act(self.LL2(self.act(self.LL1(p2_rep))))
+        pd = torch.abs(p1_rep_tr - p2_rep_tr)
+        p1q = torch.abs(p1_rep_tr - q_rep_tr)
+        p2q = torch.abs(p2_rep_tr - q_rep_tr)
+        z = torch.hstack((p1_rep_tr, p2_rep_tr, pd, p1q, p2q))
+        sim_scores = self.final_act(self.LL3(z)).reshape(n, n)
+        return sim_scores
+
+    def get_clustering(self, query, passages, k):
+        sim_scores = self.forward(query, passages)
+        dist_mat = 1 - sim_scores
+        cl = AgglomerativeClustering(n_clusters=k, affinity='precomputed', linkage='average')
+        pred_labels = cl.fit_predict(dist_mat.detach().cpu().numpy())
+        return pred_labels
+
 
 
 class QuerySpecificAttentionClusteringModel(nn.Module):
