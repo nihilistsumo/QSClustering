@@ -295,6 +295,129 @@ def treccar_clustering_qs3m_full_train(treccar_full_data_file,
     ))
 
 
+def treccar_clustering_qs3m_cob_full_train(treccar_full_data_file,
+                                           device,
+                                           train_emb,
+                                           lambda_val,
+                                           reg_val,
+                                           query_context_ref,
+                                           max_num_tokens,
+                                           max_grad_norm,
+                                           weight_decay,
+                                           warmup,
+                                           lrate,
+                                           num_epochs,
+                                           emb_model_name,
+                                           emb_dim,
+                                           val_step,
+                                           output_path):
+    if query_context_ref is not None:
+        with open(query_context_ref, 'r') as f:
+            qc = json.load(f)
+    treccar_dataset = np.load(treccar_full_data_file, allow_pickle=True)[()]['data']
+    val_samples = treccar_dataset.val_samples
+    test_samples = treccar_dataset.test_samples
+    num_steps_per_epoch = len(treccar_dataset)
+    num_train_steps = num_epochs * num_steps_per_epoch
+    model = QS3M_HACModel(emb_model_name, emb_dim, device, max_num_tokens, train_emb).to(device)
+    model_params = list(model.named_parameters())
+    no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
+    optimizer_grouped_parameters = [
+        {'params': [p for n, p in model_params if not any(nd in n for nd in no_decay)],
+         'weight_decay': weight_decay},
+        {'params': [p for n, p in model_params if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+    ]
+    opt = AdamW(optimizer_grouped_parameters, lr=lrate)
+    bb_optim = OptimCluster()
+    schd = transformers.get_linear_schedule_with_warmup(opt, warmup, num_epochs * num_train_steps)
+    model.eval()
+    if query_context_ref is not None:
+        val_rand, val_nmi = do_eval_qs3m(val_samples, model, qc)
+        test_rand, test_nmi = do_eval_qs3m(test_samples, model, qc)
+    else:
+        val_rand, val_nmi = do_eval_qs3m(val_samples, model)
+        test_rand, test_nmi = do_eval_qs3m(test_samples, model)
+    print('\nInitial evaluation')
+    print('Mean Val RAND %.4f +- %.4f, Val NMI %.4f +- %.4f Test RAND %.4f +- %.4f, Test NMI %.4f +- %.4f' % (
+        np.mean(list(val_rand.values())),
+        np.std(list(val_rand.values()), ddof=1) / np.sqrt(len(val_rand.keys())),
+        np.mean(list(val_nmi.values())),
+        np.std(list(val_nmi.values()), ddof=1) / np.sqrt(len(val_nmi.keys())),
+        np.mean(list(test_rand.values())),
+        np.std(list(test_rand.values()), ddof=1) / np.sqrt(len(test_rand.keys())),
+        np.mean(list(test_nmi.values())),
+        np.std(list(test_nmi.values()), ddof=1) / np.sqrt(len(test_nmi.keys()))
+    ))
+    for epoch in range(num_epochs):
+        print('Epoch %d\n=========' % (epoch + 1))
+        for idx in tqdm(range(len(treccar_dataset))):
+            model.train()
+            sample = treccar_dataset[idx]
+            query_content = sample.q.split('enwiki:')[1].replace('%20', ' ')
+            n = len(sample.paras)
+            k = len(set(sample.para_labels))
+            input_texts = sample.para_texts
+            # print(GPUtil.showUtilization())
+            true_adjacency_mat = true_adj_mat(sample.para_labels).to(device)
+            sim_mat = model(query_content, input_texts)
+            dist_mat = 1 - sim_mat
+            mean_similar_dist = (dist_mat * true_adjacency_mat).sum() / true_adjacency_mat.sum()
+            mean_dissimilar_dist = (dist_mat * (1.0 - true_adjacency_mat)).sum() / (1 - true_adjacency_mat).sum()
+            adjacency_mat = bb_optim.apply(dist_mat, lambda_val, k).to(device)
+            weighted_err_mat = adjacency_mat * (1.0 - true_adjacency_mat) + (1.0 - adjacency_mat) * true_adjacency_mat
+            weighted_err_mean = weighted_err_mat.mean(dim=0).sum()
+            loss = weighted_err_mean + reg_val * (mean_similar_dist - mean_dissimilar_dist)
+            loss.backward()
+            # print(batch.q + ' %d paras, Loss %.4f' % (len(batch.paras), loss.detach().item()))
+            nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            opt.step()
+            opt.zero_grad()
+            schd.step()
+            if (idx + 1) % val_step == 0:
+                model.eval()
+                if query_context_ref is not None:
+                    val_rand, val_nmi = do_eval_qs3m(val_samples, model, qc)
+                    test_rand, test_nmi = do_eval_qs3m(test_samples, model, qc)
+                else:
+                    val_rand, val_nmi = do_eval_qs3m(val_samples, model)
+                    test_rand, test_nmi = do_eval_qs3m(test_samples, model)
+                print(
+                    '\nMean Val RAND %.4f +- %.4f, Val NMI %.4f +- %.4f Test RAND %.4f +- %.4f, Test NMI %.4f +- %.4f' % (
+                        np.mean(list(val_rand.values())),
+                        np.std(list(val_rand.values()), ddof=1) / np.sqrt(len(val_rand.keys())),
+                        np.mean(list(val_nmi.values())),
+                        np.std(list(val_nmi.values()), ddof=1) / np.sqrt(len(val_nmi.keys())),
+                        np.mean(list(test_rand.values())),
+                        np.std(list(test_rand.values()), ddof=1) / np.sqrt(len(test_rand.keys())),
+                        np.mean(list(test_nmi.values())),
+                        np.std(list(test_nmi.values()), ddof=1) / np.sqrt(len(test_nmi.keys()))
+                    ))
+    if output_path is not None:
+        print('Saving the trained model...')
+        torch.save(model.state_dict(), output_path + '.model')
+        model = QS3M_HACModel(emb_model_name, emb_dim, device, max_num_tokens).to(device)
+        model.load_state_dict(torch.load(output_path + '.model'))
+    model.eval()
+    if query_context_ref is not None:
+        val_rand, val_nmi = do_eval_qs3m(val_samples, model, qc)
+        test_rand, test_nmi = do_eval_qs3m(test_samples, model, qc)
+    else:
+        val_rand, val_nmi = do_eval_qs3m(val_samples, model)
+        test_rand, test_nmi = do_eval_qs3m(test_samples, model)
+    print('\nFinal Evaluation')
+    print('================')
+    print('Mean Val RAND %.4f +- %.4f, Val NMI %.4f +- %.4f Test RAND %.4f +- %.4f, Test NMI %.4f +- %.4f' % (
+        np.mean(list(val_rand.values())),
+        np.std(list(val_rand.values()), ddof=1) / np.sqrt(len(val_rand.keys())),
+        np.mean(list(val_nmi.values())),
+        np.std(list(val_nmi.values()), ddof=1) / np.sqrt(len(val_nmi.keys())),
+        np.mean(list(test_rand.values())),
+        np.std(list(test_rand.values()), ddof=1) / np.sqrt(len(test_rand.keys())),
+        np.mean(list(test_nmi.values())),
+        np.std(list(test_nmi.values()), ddof=1) / np.sqrt(len(test_nmi.keys()))
+    ))
+
+
 def main():
     if torch.cuda.is_available():
         device = torch.device('cuda')
@@ -331,6 +454,16 @@ def main():
         treccar_clustering_qs3m_full_train(args.treccar_data, device, args.query_con, args.max_num_tokens,
                                            args.max_grad_norm, args.weight_decay, args.warmup, args.lrate, args.epochs,
                                            args.model_name, args.emb_dim, args.val_step, args.output_path)
+    elif args.experiment == 3:
+        treccar_clustering_qs3m_cob_full_train(args.treccar_data, device, False, args.lambda_val, args.reg_val,
+                                               args.query_con, args.max_num_tokens, args.max_grad_norm,
+                                               args.weight_decay, args.warmup, args.lrate, args.epochs, args.model_name,
+                                               args.emb_dim, args.val_step, args.output_path)
+    elif args.experiment == 4:
+        treccar_clustering_qs3m_cob_full_train(args.treccar_data, device, True, args.lambda_val, args.reg_val,
+                                               args.query_con, args.max_num_tokens, args.max_grad_norm,
+                                               args.weight_decay, args.warmup, args.lrate, args.epochs, args.model_name,
+                                               args.emb_dim, args.val_step, args.output_path)
 
 
 if __name__ == '__main__':

@@ -147,7 +147,7 @@ class DKM_param(nn.Module):
         while diff > self.threshold and i < self.max_iter:
             self.C = self.C_new
             # self.d = -torch.cdist(X, self.C, p=2.0)
-            self.d = -self.learned_dist(q, X, C_init)
+            self.d = -self.learned_dist(q, X, self.C)
             # self.a = self.softmax(self.cosine_sim(X, self.C) / self.temp)
             self.a = self.softmax(self.d / self.temp)
             self.a_sum = torch.sum(self.a, dim=0) + self.eps
@@ -276,9 +276,10 @@ class QuerySpecificHACModel(nn.Module):
 
 
 class QS3M_HACModel(nn.Module):
-    def __init__(self, trans_model_name, emb_dim, device, max_len):
+    def __init__(self, trans_model_name, emb_dim, device, max_len, train_emb=False):
         super(QS3M_HACModel, self).__init__()
         self.device = device
+        self.train_emb = train_emb
         emb_model = models.Transformer(trans_model_name, max_seq_length=max_len)
         pool_model = models.Pooling(emb_model.get_word_embedding_dimension())
         if emb_dim is not None:
@@ -290,10 +291,8 @@ class QS3M_HACModel(nn.Module):
         self.act = nn.ReLU()
         self.final_act = nn.Sigmoid()
 
-    def forward(self, query, passages):
-        query_vec = self.qp_model.encode([query], convert_to_tensor=True)
-        psg_vecs = self.qp_model.encode(passages, convert_to_tensor=True)
-        n = len(passages)
+    def get_similarity_mat(self, query_vec, psg_vecs):
+        n = psg_vecs.shape[0]
         q_rep = query_vec.tile(n ** 2, 1)
         p1_rep = psg_vecs.repeat_interleave(n, 0)
         p2_rep = psg_vecs.tile(n, 1)
@@ -307,8 +306,24 @@ class QS3M_HACModel(nn.Module):
         sim_scores = self.final_act(self.LL3(z)).reshape(n, n)
         return sim_scores
 
+    def forward(self, query, passages):
+        if self.train_emb:
+            query_fet = self.qp_model.tokenize([(query, "")])
+            psg_fet = self.qp_model.tokenize([(query, p) for p in passages])
+            put_features_in_device(query_fet, self.device)
+            put_features_in_device(psg_fet, self.device)
+            query_vec = self.qp_model(query_fet)['sentence_embedding']
+            psg_vecs = self.qp_model(psg_fet)['sentence_embedding']
+        else:
+            query_vec = self.qp_model.encode([query], convert_to_tensor=True)
+            psg_vecs = self.qp_model.encode(passages, convert_to_tensor=True)
+        sim_scores = self.get_similarity_mat(query_vec, psg_vecs)
+        return sim_scores
+
     def get_clustering(self, query, passages, k):
-        sim_scores = self.forward(query, passages)
+        q_vec = self.qp_model.encode([(query, "")], convert_to_tensor=True)
+        psg_vecs = self.qp_model.encode([(query, p) for p in passages], convert_to_tensor=True)
+        sim_scores = self.get_similarity_mat(q_vec, psg_vecs)
         dist_mat = 1 - sim_scores
         cl = AgglomerativeClustering(n_clusters=k, affinity='precomputed', linkage='average')
         pred_labels = cl.fit_predict(dist_mat.detach().cpu().numpy())
