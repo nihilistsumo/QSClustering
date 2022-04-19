@@ -57,11 +57,10 @@ def get_weighted_adj_rand_loss(a, c, para_labels, device, from_attn=True):
 def get_adj_rand_loss(a, c, para_labels, device, from_attn=True):
     n = len(para_labels)
     unique_labels = list(set(para_labels))
-    GT = torch.zeros(n, n, device=device)
+    GT = torch.zeros(n, len(unique_labels), device=device)
     for i in range(n):
-        for j in range(n):
-            if para_labels[i] == para_labels[j]:
-                GT[i][j] = 1.0
+        k = unique_labels.index(para_labels[i])
+        GT[i][k] = 1.0
     M = torch.matmul(GT.T, a)
     g = torch.sum(GT, dim=0)
     c = torch.sum(a, dim=0)
@@ -72,6 +71,23 @@ def get_adj_rand_loss(a, c, para_labels, device, from_attn=True):
     loss = -ari
     return loss
 
+
+def get_rand_loss(a, c, para_labels, device, from_attn=True):
+    n = len(para_labels)
+    unique_labels = list(set(para_labels))
+    gt = torch.zeros(n, n, device=device)
+    for i in range(n):
+        for j in range(n):
+            if para_labels[i] == para_labels[j]:
+                gt[i][j] = 1.0
+    if from_attn:
+        dist_mat = torch.cdist(a, a)
+    else:
+        dist_mat = torch.cdist(torch.matmul(a, c), torch.matmul(a, c))
+    sim_mat = 2 / (1 + torch.exp(dist_mat))
+    loss = torch.sum((gt - sim_mat) ** 2) / n ** 2
+    # loss = torch.sum(gt * dist_mat) / gt.shape[0] ** 2 - torch.sum((1 - gt) * dist_mat) / gt.shape[0] ** 2
+    return loss
 
 
 class DKM(nn.Module):
