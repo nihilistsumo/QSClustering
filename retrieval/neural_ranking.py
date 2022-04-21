@@ -466,11 +466,11 @@ class Mono_SBERT_Clustering_Reg_Model(nn.Module):
 
     def forward(self, sec, para_texts):
         input_sec_para_texts = []
+        if '/' in sec:
+            query = ' '.join(sec.split('/')[1:]).replace('enwiki:', '').replace('%20', ' ')
+        else:
+            query = sec.replace('enwiki:', '').replace('%20', ' ')
         for pi in range(len(para_texts)):
-            if '/' in sec:
-                query = ' '.join(sec.split('/')[1:]).replace('enwiki:', '').replace('%20', ' ')
-            else:
-                query = sec.replace('enwiki:', '').replace('%20', ' ')
             input_sec_para_texts.append((query, para_texts[pi]))
         input_fet = self.emb_model.tokenize(input_sec_para_texts)
         put_features_in_device(input_fet, self.device)
@@ -482,11 +482,11 @@ class Mono_SBERT_Clustering_Reg_Model(nn.Module):
 
     def get_qs_embeddings(self, sec, para_texts):
         input_sec_para_texts = []
+        if '/' in sec:
+            query = ' '.join(sec.split('/')[1:]).replace('enwiki:', '').replace('%20', ' ')
+        else:
+            query = sec.replace('enwiki:', '').replace('%20', ' ')
         for pi in range(len(para_texts)):
-            if '/' in sec:
-                query = ' '.join(sec.split('/')[1:]).replace('enwiki:', '').replace('%20', ' ')
-            else:
-                query = sec.replace('enwiki:', '').replace('%20', ' ')
             input_sec_para_texts.append((query, para_texts[pi]))
         output_emb = self.emb_model.encode(input_sec_para_texts, convert_to_tensor=True)
         return output_emb
@@ -957,6 +957,106 @@ def train_mono_sbert_with_clustering_reg(treccar_data,
         test_rank_eval[MAP], test_rank_eval[Rprec], test_rank_eval[nDCG]))
 
 
+def train_mono_sbert_with_bin_clustering_reg(treccar_data,
+                                            val_art_qrels,
+                                            val_qrels,
+                                            val_paratext_tsv,
+                                            test_art_qrels,
+                                            test_qrels,
+                                            test_paratext_tsv,
+                                            device,
+                                            model_out,
+                                            trans_model_name,
+                                            max_len,
+                                            max_grad_norm,
+                                            weight_decay,
+                                            warmup,
+                                            lrate,
+                                            num_epochs,
+                                            val_step,
+                                            lambda_val):
+    val_page_paras, val_page_sec_paras, val_paratext = prepare_data(val_art_qrels, val_qrels, val_paratext_tsv)
+    test_page_paras, test_page_sec_paras, test_paratext = prepare_data(test_art_qrels, test_qrels, test_paratext_tsv)
+    dataset = np.load(treccar_data, allow_pickle=True)[()]['data']
+    train_samples = dataset.samples
+    val_samples = dataset.val_samples
+    test_samples = dataset.test_samples
+    #### Smaller experiment ####
+    train_samples = train_samples[:10000]
+    ############################
+    trans_model = models.Transformer(trans_model_name, max_seq_length=max_len)
+    pool_model = models.Pooling(trans_model.get_word_embedding_dimension())
+    emb_model = SentenceTransformer(modules=[trans_model, pool_model]).to(device)
+    model = Mono_SBERT_Clustering_Reg_Model(emb_model, device)
+    model_params = list(model.named_parameters())
+    no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
+    optimizer_grouped_parameters = [
+        {'params': [p for n, p in model_params if not any(nd in n for nd in no_decay)],
+         'weight_decay': weight_decay},
+        {'params': [p for n, p in model_params if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+    ]
+    opt = AdamW(optimizer_grouped_parameters, lr=lrate)
+    train_data_len = len(train_samples)
+    schd = transformers.get_linear_schedule_with_warmup(opt, warmup, num_epochs * train_data_len)
+    mse = nn.MSELoss()
+    val_rank_eval = eval_mono_bert_ranking(model, val_samples)
+    print('\nInitial val MAP: %.4f' % val_rank_eval[MAP])
+    rand_rank_eval, rand_rand_dict, rand_nmi_dict = eval_random_ranker(val_samples)
+    print('\nRandom ranker performance val MAP: %.4f' % rand_rank_eval[MAP])
+    val_eval_score = val_rank_eval[MAP]
+    bm25_rank_eval = eval_bm25_ranker(val_samples)
+    print('\nBM25 ranker performance val MAP: %.4f' % bm25_rank_eval[MAP])
+    for epoch in range(num_epochs):
+        print('Epoch %3d' % (epoch + 1))
+        for i in tqdm(range(train_data_len)):
+            sample = train_samples[i]
+            k = len(set(sample.para_labels))
+            '''
+            if k > 4:
+                continue
+            '''
+            n = len(sample.paras)
+            model.train()
+            for sec in set(sample.para_labels):
+                true_sim_mat = torch.zeros((n, n)).to(device)
+                for p in range(n):
+                    for q in range(n):
+                        if sample.para_labels[p] == sample.para_labels[q] == sec:
+                            true_sim_mat[p][q] = 1.0
+                        elif sample.para_labels[p] != sec and sample.para_labels[q] != sec:
+                            true_sim_mat[p][q] = 1.0
+                pred_score, sim_mat = model(sec, sample.para_texts)
+                true_labels = [1.0 if sec == sample.para_labels[p] else 0 for p in range(len(sample.para_labels))]
+                true_labels_tensor = torch.tensor(true_labels).to(device)
+                rk_loss = mse(pred_score, true_labels_tensor)
+                cl_loss = mse(sim_mat, true_sim_mat)
+                loss = lambda_val * rk_loss + (1 - lambda_val) * cl_loss
+                loss.backward()
+                # print('Rank loss: %.4f, Cluster loss: %.4f, Loss: %.4f' % (rk_loss.item(), cl_loss.item(), loss.item()))
+                nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                opt.step()
+                opt.zero_grad()
+                schd.step()
+            if (i + 1) % val_step == 0:
+                val_rank_eval = eval_mono_bert_ranking(model, val_samples)
+                print('\nval MAP: %.4f' % val_rank_eval[MAP])
+                if val_rank_eval[MAP] > val_eval_score and model_out is not None:
+                    torch.save(model, model_out)
+                    val_eval_score = val_rank_eval[MAP]
+
+    val_rank_eval = eval_mono_bert_ranking(model, val_samples)
+    print('\nval MAP: %.4f' % val_rank_eval[MAP])
+    if val_rank_eval[MAP] > val_eval_score and model_out is not None:
+        torch.save(model, model_out)
+    print('\nTraining complete. Evaluating on full val and test sets...')
+    val_rank_eval = eval_mono_bert_ranking_full(model, val_page_paras, val_page_sec_paras, val_paratext, val_qrels)
+    print('\nFull val eval MAP: %.4f, Rprec: %.4f, nDCG: %.4f' % (
+        val_rank_eval[MAP], val_rank_eval[Rprec], val_rank_eval[nDCG]))
+    test_rank_eval = eval_mono_bert_ranking_full(model, test_page_paras, test_page_sec_paras, test_paratext, test_qrels)
+    print('\nFull test eval MAP: %.4f, Rprec: %.4f, nDCG: %.4f' % (
+        test_rank_eval[MAP], test_rank_eval[Rprec], test_rank_eval[nDCG]))
+
+
 class Duo_Siamese_SBERT(nn.Module):
     def __init__(self, sbert_emb_model_name, query_max_len, psg_max_len, device):
         super(Duo_Siamese_SBERT, self).__init__()
@@ -1153,6 +1253,12 @@ def main():
 
     elif args.number_exp == 3:
         train_mono_sbert_with_clustering_reg(args.treccar_data, args.val_art_qrels, args.val_qrels, args.val_ptext,
+                                        args.test_art_qrels, args.test_qrels, args.test_ptext, device, args.output_model,
+                                        args.model_name, args.max_num_tokens, args.max_grad_norm, args.weight_decay,
+                                        args.warmup, args.lrate, args.epochs, args.switch_step, args.lambda_val)
+
+    elif args.number_exp == 4:
+        train_mono_sbert_with_bin_clustering_reg(args.treccar_data, args.val_art_qrels, args.val_qrels, args.val_ptext,
                                         args.test_art_qrels, args.test_qrels, args.test_ptext, device, args.output_model,
                                         args.model_name, args.max_num_tokens, args.max_grad_norm, args.weight_decay,
                                         args.warmup, args.lrate, args.epochs, args.switch_step, args.lambda_val)

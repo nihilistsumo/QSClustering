@@ -42,7 +42,7 @@ def main():
                         default='D:\\new_cats_data\\benchmarkY1\\benchmarkY1-test-nodup\\test.pages.cbor-toplevel.qrels')
     parser.add_argument('-tp', '--test_ptext',
                         default='D:\\new_cats_data\\benchmarkY1\\benchmarkY1-test-nodup\\by1test_paratext\\by1test_paratext.tsv')
-    parser.add_argument('-md', '--model_dir', default='D:\\retrieval_experiments\\monobert_clustering_reg')
+    parser.add_argument('-md', '--model_dir', default='D:\\retrieval_experiments\\monobert_clustering_reg\\saved_models')
     parser.add_argument('-ne', '--number_exp', type=int, default=1)
     parser.add_argument('-mn', '--model_name', help='SBERT embedding model name', default='sentence-transformers/all-MiniLM-L6-v2')
 
